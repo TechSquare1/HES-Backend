@@ -66,3 +66,28 @@ exports.getFileUrl = (req, file) => {
   return `/uploads${relativePath}`;
 };
 
+// Helper function to delete file
+exports.deleteFile = (filename) => {
+  return new Promise((resolve, reject) => {
+    if (!filename) {
+      resolve();
+      return;
+    }
+
+    // Construct the full path
+    const filePath = path.join(uploadsDir, filename);
+
+    // Check if file exists and delete it
+    fs.unlink(filePath, (err) => {
+      if (err) {
+        console.error('Error deleting file:', err);
+        // Don't reject - file might not exist, which is fine
+        resolve();
+      } else {
+        console.log('File deleted successfully:', filename);
+        resolve();
+      }
+    });
+  });
+};
+

@@ -8,6 +8,7 @@ const {
   deleteFee,
   getAllStudents,
   getMonthlyFeeReport,
+  bulkCreateFees,
 } = require('../controllers/nazimController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -21,6 +22,7 @@ router.get('/dashboard', getDashboardStats);
 // Fees Management (full CRUD)
 router.get('/fees', getAllFees);
 router.post('/fees', createFee);
+router.post('/fees/bulk', bulkCreateFees);
 router.put('/fees/:id', updateFee);
 router.delete('/fees/:id', deleteFee);
 

@@ -103,7 +103,7 @@ exports.login = async (req, res) => {
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid credentials - User not found',
+        message: 'Invalid credentials',
       });
     }
 
@@ -120,7 +120,7 @@ exports.login = async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid credentials - Wrong password',
+        message: 'Invalid credentials',
       });
     }
 
@@ -146,6 +146,7 @@ exports.login = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error',
@@ -194,14 +195,19 @@ exports.getMe = async (req, res) => {
 // @access  Private
 exports.updateProfile = async (req, res) => {
   try {
-    const { name, email, parentPhone } = req.body;
-    const profileImage = req.file ? getFileUrl(req, req.file) : undefined;
+    const { name, email, parentPhone, adminId } = req.body;
+    // Updated for GCP Cloud Storage support (async) - old: synchronous local file URL
+    const profileImage = req.file ? await getFileUrl(req, req.file) : undefined;
+
+    // Get current user to check existing adminId
+    const currentUser = await User.findById(req.user.id);
 
     const updateData = {};
     if (name) updateData.name = name;
     if (email) updateData.email = email.toLowerCase().trim();
     if (profileImage) updateData.profileImage = profileImage;
     if (parentPhone) updateData.parentPhone = parentPhone;
+    if (adminId && req.user.role === 'admin' && adminId !== currentUser.adminId) updateData.adminId = adminId;
 
     const user = await User.findByIdAndUpdate(req.user.id, updateData, {
       new: true,
@@ -227,9 +233,24 @@ exports.updateProfile = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({
+    let errorMessage = 'Server error';
+
+    // Handle MongoDB duplicate key error
+    if (error.code === 11000) {
+      if (error.message.includes('adminId')) {
+        errorMessage = 'Admin ID already exists. Please choose a different ID.';
+      } else if (error.message.includes('email')) {
+        errorMessage = 'Email already exists. Please choose a different email.';
+      } else {
+        errorMessage = 'Duplicate value error. Please check your input.';
+      }
+    } else if (error.name === 'ValidationError') {
+      errorMessage = 'Validation error: ' + Object.values(error.errors).map(err => err.message).join(', ');
+    }
+
+    res.status(error.code === 11000 ? 400 : 500).json({
       success: false,
-      message: 'Server error',
+      message: errorMessage,
       error: error.message,
     });
   }

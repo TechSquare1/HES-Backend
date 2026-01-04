@@ -4,6 +4,8 @@ const Attendance = require('../models/Attendance');
 const Fees = require('../models/Fees');
 const User = require('../models/User');
 const Announcement = require('../models/Announcement');
+const ResultCard = require('../models/ResultCard');
+const ClassExamResult = require('../models/ClassExamResult');
 
 // @desc    Get teacher's classes
 // @route   GET /api/teacher/classes
@@ -22,7 +24,7 @@ exports.getMyClasses = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }
@@ -49,7 +51,7 @@ exports.getMyStudents = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }
@@ -72,7 +74,7 @@ exports.getMyExams = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }
@@ -84,6 +86,14 @@ exports.getMyExams = async (req, res) => {
 exports.createExam = async (req, res) => {
   try {
     const { examName, classId, examDate, totalMarks } = req.body;
+
+    // Validate required fields
+    if (!examName || !classId || !examDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide exam name, class, and date',
+      });
+    }
 
     const exam = await Exam.create({
       examName,
@@ -99,9 +109,10 @@ exports.createExam = async (req, res) => {
       data: exam,
     });
   } catch (error) {
+    console.error('Create exam error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }
@@ -165,7 +176,7 @@ exports.addExamResults = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }
@@ -201,7 +212,7 @@ exports.getExamResults = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }
@@ -213,38 +224,100 @@ exports.getExamResults = async (req, res) => {
 exports.markAttendance = async (req, res) => {
   try {
     const { studentId, classId, date, status, attendanceList } = req.body;
-    const attendanceDate = date ? new Date(date) : new Date();
-    attendanceDate.setHours(0, 0, 0, 0);
+
+    // Parse date safely to avoid timezone shifting (treat as UTC day)
+    let attendanceDate;
+    if (date) {
+      // If date is in YYYY-MM-DD format, create date at noon UTC to avoid timezone issues
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        const [year, month, day] = date.split('-').map(Number);
+        // Create date at noon UTC to avoid daylight saving issues
+        attendanceDate = new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
+      } else {
+        attendanceDate = new Date(date);
+        // Normalize to noon UTC
+        attendanceDate = new Date(Date.UTC(
+          attendanceDate.getUTCFullYear(),
+          attendanceDate.getUTCMonth(),
+          attendanceDate.getUTCDate(),
+          12, 0, 0, 0
+        ));
+      }
+    } else {
+      const now = new Date();
+      attendanceDate = new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate(),
+        12, 0, 0, 0
+      ));
+    }
 
     // Bulk attendance marking
     if (attendanceList && Array.isArray(attendanceList)) {
       const results = [];
+      const Notification = require('../models/Notification');
+      const absentNotifications = [];
       
       for (const item of attendanceList) {
-        const existingAttendance = await Attendance.findOne({
-          studentId: item.studentId,
-          classId: item.classId,
-          date: {
-            $gte: new Date(attendanceDate),
-            $lt: new Date(attendanceDate.getTime() + 24 * 60 * 60 * 1000),
-          },
-        });
+        try {
+          // Create date range for the entire day in UTC
+          const startOfDay = new Date(Date.UTC(
+            attendanceDate.getUTCFullYear(),
+            attendanceDate.getUTCMonth(),
+            attendanceDate.getUTCDate(),
+            0, 0, 0, 0
+          ));
+          const endOfDay = new Date(Date.UTC(
+            attendanceDate.getUTCFullYear(),
+            attendanceDate.getUTCMonth(),
+            attendanceDate.getUTCDate(),
+            23, 59, 59, 999
+          ));
 
-        if (existingAttendance) {
-          existingAttendance.status = item.status || 'present';
-          existingAttendance.markedBy = req.user.id;
-          await existingAttendance.save();
-          results.push(existingAttendance);
-        } else {
-          const newAttendance = await Attendance.create({
+          const existingAttendance = await Attendance.findOne({
             studentId: item.studentId,
             classId: item.classId,
-            date: attendanceDate,
-            status: item.status || 'present',
-            markedBy: req.user.id,
+            date: {
+              $gte: startOfDay,
+              $lt: endOfDay,
+            },
           });
-          results.push(newAttendance);
+
+          if (existingAttendance) {
+            existingAttendance.status = item.status || 'present';
+            existingAttendance.markedBy = req.user.id;
+            await existingAttendance.save();
+            results.push(existingAttendance);
+          } else {
+            const newAttendance = await Attendance.create({
+              studentId: item.studentId,
+              classId: item.classId,
+              date: attendanceDate,
+              status: item.status || 'present',
+              markedBy: req.user.id,
+            });
+            results.push(newAttendance);
+          }
+        } catch (itemError) {
+          console.error(`Error processing attendance for student ${item.studentId}:`, itemError);
+          // Continue processing other students even if one fails
         }
+        
+        // Create absence notification
+        if (item.status === 'absent') {
+          absentNotifications.push({
+            userId: item.studentId,
+            title: 'Absence Alert',
+            message: `You were marked absent on ${attendanceDate.toLocaleDateString()}`,
+            type: 'attendance',
+          });
+        }
+      }
+      
+      // Insert absence notifications
+      if (absentNotifications.length > 0) {
+        await Notification.insertMany(absentNotifications);
       }
 
       return res.status(201).json({
@@ -256,12 +329,25 @@ exports.markAttendance = async (req, res) => {
     }
 
     // Single attendance marking
+    const startOfDay = new Date(Date.UTC(
+      attendanceDate.getUTCFullYear(),
+      attendanceDate.getUTCMonth(),
+      attendanceDate.getUTCDate(),
+      0, 0, 0, 0
+    ));
+    const endOfDay = new Date(Date.UTC(
+      attendanceDate.getUTCFullYear(),
+      attendanceDate.getUTCMonth(),
+      attendanceDate.getUTCDate(),
+      23, 59, 59, 999
+    ));
+
     const existingAttendance = await Attendance.findOne({
       studentId,
       classId,
       date: {
-        $gte: new Date(attendanceDate),
-        $lt: new Date(attendanceDate.getTime() + 24 * 60 * 60 * 1000),
+        $gte: startOfDay,
+        $lt: endOfDay,
       },
     });
 
@@ -288,7 +374,7 @@ exports.markAttendance = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }
@@ -311,7 +397,7 @@ exports.getClassAttendance = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }
@@ -336,7 +422,7 @@ exports.getAllAvailableStudents = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }
@@ -406,9 +492,10 @@ exports.addStudentToClass = async (req, res) => {
       data: updatedStudent,
     });
   } catch (error) {
+    console.error('Add student to class error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }
@@ -498,7 +585,7 @@ exports.updateStudent = async (req, res) => {
     }
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }
@@ -546,7 +633,7 @@ exports.removeStudent = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }
@@ -591,7 +678,332 @@ exports.getStudentFees = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Get announcements for teachers
+// @route   GET /api/teacher/announcements
+// @access  Private/Teacher
+exports.getAnnouncements = async (req, res) => {
+  try {
+    const announcements = await Announcement.find({
+      isActive: true,
+      $or: [
+        { targetAudience: 'all' },
+        { targetAudience: 'teachers' },
+      ],
+    })
+      .sort({ createdAt: -1 })
+      .limit(10);
+
+    res.json({
+      success: true,
+      count: announcements.length,
+      data: announcements,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark attendance. Please try again.',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Get simple class progress report (monthly or yearly)
+// @route   GET /api/teacher/reports/class
+// @access  Private/Teacher
+exports.getClassProgressReport = async (req, res) => {
+  try {
+    const { classId, type = 'monthly', month, year } = req.query;
+    console.log('Class Progress Report Request:', { classId, type, month, year });
+
+    if (!classId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Class ID is required',
+      });
+    }
+
+    // Verify class belongs to this teacher and get teacher name
+    const cls = await Class.findOne({ _id: classId, teacherId: req.user.id })
+      .populate('teacherId', 'name');
+    if (!cls) {
+      return res.status(404).json({
+        success: false,
+        message: 'Class not found or not assigned to you',
+      });
+    }
+
+    const now = new Date();
+    const reportYear = year ? parseInt(year, 10) : now.getFullYear();
+
+    let startDate;
+    let endDate;
+    let periodLabel;
+
+    if (type === 'yearly') {
+      startDate = new Date(reportYear, 0, 1);
+      endDate = new Date(reportYear, 11, 31, 23, 59, 59, 999);
+      periodLabel = `${reportYear}`;
+    } else {
+      const reportMonth = month ? parseInt(month, 10) : now.getMonth() + 1;
+      console.log('Report month from param:', month, 'parsed:', reportMonth);
+      if (reportMonth < 1 || reportMonth > 12) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid month',
+        });
+      }
+      startDate = new Date(reportYear, reportMonth - 1, 1);
+      endDate = new Date(reportYear, reportMonth, 0, 23, 59, 59, 999);
+      const monthNames = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+      ];
+      periodLabel = `${monthNames[reportMonth - 1]} ${reportYear}`;
+    }
+
+    console.log('Date range:', { startDate, endDate, periodLabel });
+
+    // Attendance for this class and period
+    const attendanceRecords = await Attendance.find({
+      classId: classId,
+      date: { $gte: startDate, $lte: endDate },
+    });
+
+    const totalMarked = attendanceRecords.length;
+    const presentCount = attendanceRecords.filter(a => a.status === 'present').length;
+    const absentCount = attendanceRecords.filter(a => a.status === 'absent').length;
+    const leaveCount = attendanceRecords.filter(a => a.status === 'leave').length;
+    const attendancePercentage =
+      totalMarked > 0 ? Math.round((presentCount / totalMarked) * 100) : 0;
+
+    // Get students in this class
+    const classStudents = await User.find({ classId: classId, role: 'student' });
+    const studentIds = classStudents.map(s => s._id);
+
+    // Fees for students in this class and period
+    let feesQuery = {
+      studentId: { $in: studentIds },
+      year: reportYear,
+    };
+
+    if (type === 'monthly') {
+      const reportMonth = month ? parseInt(month, 10) : now.getMonth() + 1;
+      feesQuery.month = reportMonth.toString();
+    }
+
+    const feesRecords = await Fees.find(feesQuery);
+
+    // Count unique students who have paid vs unpaid
+    const paidStudentIds = new Set(
+      feesRecords
+        .filter(f => f.status === 'paid')
+        .map(f => f.studentId.toString())
+    );
+
+    const unpaidFeesRecords = feesRecords.filter(f => f.status !== 'paid');
+    const unpaidStudentIds = new Set();
+
+    // For unpaid, we need to check which students have NO paid fees in the period
+    // First, get all students who have any fee record (paid or unpaid) in the period
+    const studentsWithFees = new Set(
+      feesRecords.map(f => f.studentId.toString())
+    );
+
+    // Students with no fee records at all in this period are considered unpaid
+    const studentsWithoutAnyFees = studentIds.filter(id => !studentsWithFees.has(id.toString()));
+
+    // Students who have unpaid fee records
+    unpaidFeesRecords.forEach(f => unpaidStudentIds.add(f.studentId.toString()));
+
+    // Combine students without any fees + students with unpaid fees
+    const allUnpaidStudentIds = new Set([...studentsWithoutAnyFees, ...Array.from(unpaidStudentIds)]);
+
+    const paidCount = paidStudentIds.size;
+    const unpaidCount = allUnpaidStudentIds.size;
+
+    // Get students in this class with detailed information
+    const students = await User.find({
+      classId: classId,
+      role: 'student'
+    }).select('name studentId').sort({ name: 1 });
+
+    // Get attendance records for each student in this period
+    const studentAttendanceMap = new Map();
+    const studentFeesMap = new Map();
+    const studentResultsMap = new Map();
+
+    // Get attendance for each student
+    for (const student of students) {
+      try {
+        const studentAttendance = await Attendance.find({
+          studentId: student._id,
+          date: { $gte: startDate, $lte: endDate },
+        }).sort({ date: 1 });
+
+        // Calculate attendance summary
+        const totalDays = studentAttendance.length;
+        const presentDays = studentAttendance.filter(a => a.status === 'present').length;
+        const absentDays = studentAttendance.filter(a => a.status === 'absent').length;
+        const leaveDays = studentAttendance.filter(a => a.status === 'leave').length;
+
+        studentAttendanceMap.set(student._id.toString(), {
+          totalDays,
+          presentDays,
+          absentDays,
+          leaveDays,
+          records: studentAttendance
+        });
+
+        // Get fees for this student in this period
+        let feesQuery = {
+          studentId: student._id,
+          year: reportYear,
+        };
+
+        if (type === 'monthly') {
+          const reportMonth = month ? parseInt(month, 10) : now.getMonth() + 1;
+          feesQuery.month = reportMonth.toString();
+        }
+
+        const studentFees = await Fees.find(feesQuery);
+        const paidFees = studentFees.filter(f => f.status === 'paid').length;
+        const unpaidFees = studentFees.filter(f => f.status !== 'paid').length;
+
+        studentFeesMap.set(student._id.toString(), {
+          paid: paidFees,
+          unpaid: unpaidFees,
+          total: studentFees.length
+        });
+
+        // Get exam results for this student
+        const studentResults = await ResultCard.find({
+          studentId: student._id,
+          createdAt: { $gte: startDate, $lte: endDate },
+        });
+
+        const studentExamResults = studentResults.map(result => ({
+          examName: result.examName || 'Unknown Exam',
+          examYear: result.examYear || '',
+          obtainedMarks: result.obtainedMarks || 0,
+          totalMarks: result.totalMarks || 0,
+          percentage: result.totalMarks ?
+            Math.round((result.obtainedMarks / result.totalMarks) * 100) : 0
+        }));
+
+        studentResultsMap.set(student._id.toString(), studentExamResults);
+      } catch (studentError) {
+        console.error(`Error processing student ${student._id}:`, studentError);
+        // Continue with other students even if one fails
+        studentAttendanceMap.set(student._id.toString(), {
+          totalDays: 0, presentDays: 0, absentDays: 0, leaveDays: 0, records: []
+        });
+        studentFeesMap.set(student._id.toString(), {
+          paid: 0, unpaid: 0, total: 0
+        });
+        studentResultsMap.set(student._id.toString(), []);
+      }
+    }
+
+    // Get unique exam names for participation check
+    const examNames = new Set();
+    students.forEach(student => {
+      const results = studentResultsMap.get(student._id.toString()) || [];
+      results.forEach(result => {
+        if (result.examName && result.examYear) {
+          examNames.add(`${result.examName} ${result.examYear}`);
+        }
+      });
+    });
+
+    console.log('Found exam names:', Array.from(examNames));
+    console.log('Processed students:', students.length);
+
+    // Build detailed student records
+    const studentRecords = students.map(student => {
+      const attendance = studentAttendanceMap.get(student._id.toString()) || {
+        totalDays: 0, presentDays: 0, absentDays: 0, leaveDays: 0, records: []
+      };
+      const fees = studentFeesMap.get(student._id.toString()) || {
+        paid: 0, unpaid: 0, total: 0
+      };
+      const examResults = studentResultsMap.get(student._id.toString()) || [];
+
+      return {
+        id: student._id,
+        studentId: student.studentId,
+        name: student.name,
+        attendance: {
+          totalDays: attendance.totalDays,
+          presentDays: attendance.presentDays,
+          absentDays: attendance.absentDays,
+          leaveDays: attendance.leaveDays,
+          status: attendance.totalDays > 0 ?
+            (attendance.presentDays / attendance.totalDays >= 0.8 ? 'Good' :
+             attendance.presentDays / attendance.totalDays >= 0.6 ? 'Average' : 'Poor') : 'No Record'
+        },
+        fees: {
+          paid: fees.paid,
+          unpaid: fees.unpaid,
+          status: fees.total > 0 ?
+            (fees.paid === fees.total ? 'Paid' :
+             fees.unpaid === 0 ? 'Paid' : 'Partial') : 'No Fees'
+        },
+        exams: examResults
+      };
+    });
+
+    // Calculate participation rate after studentRecords is defined
+    const participationRate = students.length > 0 ?
+      Math.round((studentRecords.filter(s => s.exams.length > 0).length / students.length) * 100) : 0;
+
+    res.json({
+      success: true,
+      data: {
+        class: {
+          id: cls._id,
+          name: cls.className,
+          section: cls.section || '',
+          totalStudents: students.length,
+          teacherName: cls.teacherId ? cls.teacherId.name : undefined,
+        },
+        period: {
+          type,
+          label: periodLabel,
+          year: reportYear,
+        },
+        attendance: {
+          totalMarked,
+          present: presentCount,
+          absent: absentCount,
+          leave: leaveCount,
+          percentage: attendancePercentage,
+        },
+        fees: {
+          paidCount,
+          unpaidCount,
+        },
+        exams: {
+          examNames: Array.from(examNames),
+          totalExams: 0, // Will be updated with actual exam count if needed
+          totalResults: 0, // Will be updated with actual results count if needed
+          averagePercentage: 0, // Will be updated with actual average if needed
+          passRate: 0, // Will be updated with actual pass rate if needed
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Class progress report error:', error);
+    console.error('Error stack:', error.stack);
+    console.error('Request params:', req.query);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate class progress report. Please try again.',
       error: error.message,
     });
   }
@@ -610,10 +1022,19 @@ exports.getDashboardStats = async (req, res) => {
     const students = await User.find({ classId: { $in: classIds } });
     const studentIds = students.map(s => s._id);
 
-    const [myClasses, myStudents, myExams, newAnnouncements] = await Promise.all([
+    // Count unique exam name-year combinations from ClassExamResult for teacher's classes
+    const classExamResults = classIds.length > 0
+      ? await ClassExamResult.find({ classId: { $in: classIds } }).select('examName examYear')
+      : [];
+    const uniqueExams = new Set();
+    classExamResults.forEach(result => {
+      uniqueExams.add(`${result.examName}-${result.examYear}`);
+    });
+    const examCount = uniqueExams.size;
+
+    const [myClasses, myStudents, newAnnouncements] = await Promise.all([
       Class.countDocuments({ teacherId: req.user.id }),
       User.countDocuments({ classId: { $in: classIds } }),
-      Exam.countDocuments({ teacherId: req.user.id }),
       Announcement.countDocuments({ 
         isActive: true,
         createdAt: { $gte: twoDaysAgo },
@@ -629,14 +1050,93 @@ exports.getDashboardStats = async (req, res) => {
       data: {
         classes: myClasses,
         students: myStudents,
-        exams: myExams,
+        exams: examCount,
         newAnnouncements,
       },
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Failed to mark attendance. Please try again.',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Get result cards for my classes
+// @route   GET /api/teacher/result-cards
+// @access  Private/Teacher
+exports.getMyClassResultCards = async (req, res) => {
+  try {
+    const { classId, examName, examYear } = req.query;
+
+    // Get teacher's classes
+    const classes = await Class.find({ teacherId: req.user.id });
+    const classIds = classes.map((c) => c._id);
+
+    const query = { classId: { $in: classIds } };
+    if (classId) query.classId = classId;
+    if (examName) query.examName = examName;
+    if (examYear) query.examYear = parseInt(examYear);
+
+    const resultCards = await ResultCard.find(query)
+      .populate('studentId', 'name studentId fatherName')
+      .populate({
+        path: 'classId',
+        select: 'className section',
+        populate: { path: 'teacherId', select: 'name' }
+      })
+      .sort({ examYear: -1, createdAt: -1 });
+
+    res.json({
+      success: true,
+      count: resultCards.length,
+      data: resultCards,
+    });
+  } catch (error) {
+    console.error('Get my class result cards error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark attendance. Please try again.',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Get class exam results for my classes
+// @route   GET /api/teacher/class-exam-results
+// @access  Private/Teacher
+exports.getMyClassExamResults = async (req, res) => {
+  try {
+    const { classId, examName, examYear } = req.query;
+
+    // Get teacher's classes
+    const classes = await Class.find({ teacherId: req.user.id });
+    const classIds = classes.map((c) => c._id);
+
+    const query = { classId: { $in: classIds } };
+    if (classId) query.classId = classId;
+    if (examName) query.examName = examName;
+    if (examYear) query.examYear = parseInt(examYear);
+
+    const classExamResults = await ClassExamResult.find(query)
+      .populate({
+        path: 'classId',
+        select: 'className section',
+        populate: { path: 'teacherId', select: 'name' }
+      })
+      .sort({ examYear: -1, createdAt: -1 });
+
+    res.json({
+      success: true,
+      count: classExamResults.length,
+      data: classExamResults,
+    });
+  } catch (error) {
+    console.error('Get my class exam results error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
   }

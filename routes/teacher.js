@@ -15,6 +15,10 @@ const {
   getClassAttendance,
   getStudentFees,
   getDashboardStats,
+  getAnnouncements,
+  getClassProgressReport,
+  getMyClassResultCards,
+  getMyClassExamResults,
 } = require('../controllers/teacherController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -45,8 +49,18 @@ router.get('/exams/:id/results', getExamResults);
 router.get('/attendance/:classId', getClassAttendance);
 router.post('/attendance', markAttendance);
 
+// Reports
+router.get('/reports/class', getClassProgressReport);
+
 // Fees (view only)
 router.get('/fees', getStudentFees);
+
+// Announcements
+router.get('/announcements', getAnnouncements);
+
+// Result Cards
+router.get('/result-cards', getMyClassResultCards);
+router.get('/class-exam-results', getMyClassExamResults);
 
 module.exports = router;
 

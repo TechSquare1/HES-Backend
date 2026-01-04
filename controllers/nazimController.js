@@ -1,63 +1,57 @@
 const Fees = require('../models/Fees');
 const User = require('../models/User');
 
-// @desc    Get dashboard stats for Nazim
+// @desc    Get dashboard stats for Nazim (Monthly-based)
 // @route   GET /api/nazim/dashboard
 // @access  Private/Nazim
 exports.getDashboardStats = async (req, res) => {
   try {
     const today = new Date();
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    const currentMonth = (today.getMonth() + 1).toString(); // 1-12
+    const currentYear = today.getFullYear();
 
-    // Get fees statistics
-    const allFees = await Fees.find();
-    const monthlyFees = await Fees.find({
-      dueDate: { $gte: startOfMonth, $lte: endOfMonth },
-    });
+    // Get fees for current month only
+    const currentMonthFees = await Fees.find({
+      month: currentMonth,
+      year: currentYear,
+    }).populate('studentId', '_id');
 
     const totalStudents = await User.countDocuments({ role: 'student' });
     
-    // Calculate totals
-    let totalPending = 0;
-    let totalPaid = 0;
-    let totalOverdue = 0;
+    // Count unique students who are paid/unpaid for current month
+    const paidStudentIds = new Set();
+    const unpaidStudentIds = new Set();
 
-    allFees.forEach((fee) => {
+    currentMonthFees.forEach((fee) => {
+      const studentId = fee.studentId?._id || fee.studentId;
+      if (!studentId) return;
+
       if (fee.status === 'paid') {
-        totalPaid += fee.amount;
-      } else if (fee.status === 'partial') {
-        totalPaid += fee.paidAmount || 0;
-        totalPending += fee.amount - (fee.paidAmount || 0);
+        paidStudentIds.add(studentId.toString());
+        // Remove from unpaid if it was there
+        unpaidStudentIds.delete(studentId.toString());
       } else {
-        totalPending += fee.amount;
-      }
-
-      // Check for overdue (after 10th of the month)
-      if (fee.status !== 'paid' && fee.dueDate) {
-        const dueDate = new Date(fee.dueDate);
-        const dueMonth = dueDate.getMonth();
-        const dueYear = dueDate.getFullYear();
-        // Fee is overdue after 10th of the due month
-        const overdueDate = new Date(dueYear, dueMonth, 10);
-        if (today > overdueDate) {
-          totalOverdue++;
-        }
+        unpaidStudentIds.add(studentId.toString());
+        // Remove from paid if it was there
+        paidStudentIds.delete(studentId.toString());
       }
     });
+
+    const paidCount = paidStudentIds.size;
+    const unpaidCount = unpaidStudentIds.size;
 
     res.json({
       success: true,
       data: {
         totalStudents,
-        totalFees: allFees.length,
-        totalPending,
-        totalPaid,
-        totalOverdue,
-        monthlyFeesCount: monthlyFees.length,
+        paidCount, // Unique students paid for current month
+        unpaidCount, // Unique students unpaid for current month
+        currentMonth: currentMonth,
+        currentYear: currentYear,
       },
     });
   } catch (error) {
+    console.error('Get dashboard stats error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error',
@@ -124,18 +118,18 @@ exports.getAllFees = async (req, res) => {
   }
 };
 
-// @desc    Create new fee record
+// @desc    Create new fee record (single student)
 // @route   POST /api/nazim/fees
 // @access  Private/Nazim
 exports.createFee = async (req, res) => {
   try {
     const { studentId, amount, dueDate, month, year, remarks } = req.body;
 
-    // Validate required fields
-    if (!studentId || !amount || !dueDate) {
+    // Validate required fields - amount can be 0 for simple paid/unpaid tracking
+    if (!studentId || !dueDate) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide studentId, amount, and dueDate',
+        message: 'Please provide studentId and dueDate',
       });
     }
 
@@ -166,7 +160,7 @@ exports.createFee = async (req, res) => {
 
     const fee = await Fees.create({
       studentId,
-      amount: parseFloat(amount),
+      amount: amount !== undefined ? parseFloat(amount) : 0,
       dueDate: new Date(dueDate),
       month: month || null,
       year: year ? parseInt(year) : null,
@@ -186,6 +180,92 @@ exports.createFee = async (req, res) => {
       data: populatedFee,
     });
   } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Bulk create fee records for ALL students for a month/year
+// @route   POST /api/nazim/fees/bulk
+// @access  Private/Nazim
+exports.bulkCreateFees = async (req, res) => {
+  try {
+    const { month, year, dueDay } = req.body;
+
+    if (!month || !year) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide month and year',
+      });
+    }
+
+    const reportMonth = parseInt(month);
+    const reportYear = parseInt(year);
+
+    if (reportMonth < 1 || reportMonth > 12) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid month',
+      });
+    }
+
+    // Default due date = 10th of the month (can be overridden by dueDay)
+    const day = dueDay && Number.isInteger(dueDay) ? dueDay : 10;
+    const dueDate = new Date(reportYear, reportMonth - 1, day);
+
+    // Get all active students
+    const students = await User.find({ role: 'student' }).select('_id');
+
+    if (!students || students.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No students found to create fee records',
+      });
+    }
+
+    let createdCount = 0;
+    let skippedCount = 0;
+
+    for (const student of students) {
+      // Skip if fee already exists for this student/month/year
+      const existingFee = await Fees.findOne({
+        studentId: student._id,
+        month: month.toString(),
+        year: reportYear,
+      });
+
+      if (existingFee) {
+        skippedCount++;
+        continue;
+      }
+
+      await Fees.create({
+        studentId: student._id,
+        amount: 0,
+        dueDate,
+        month: month.toString(),
+        year: reportYear,
+        status: 'pending',
+        paidAmount: 0,
+      });
+
+      createdCount++;
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Fee records created for all students',
+      data: {
+        createdCount,
+        skippedCount,
+        totalStudents: students.length,
+      },
+    });
+  } catch (error) {
+    console.error('Bulk create fees error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error',
@@ -359,26 +439,18 @@ exports.getMonthlyFeeReport = async (req, res) => {
 
     console.log('Found fees:', fees.length);
 
-    // Calculate statistics
-    let totalAmount = 0;
-    let totalPaid = 0;
-    let totalPending = 0;
+    // Calculate statistics (simplified - focus on paid/unpaid counts)
     let paidCount = 0;
     let unpaidCount = 0;
     let partialCount = 0;
 
     fees.forEach(fee => {
-      totalAmount += fee.amount;
       if (fee.status === 'paid') {
-        totalPaid += fee.amount;
         paidCount++;
       } else if (fee.status === 'partial') {
-        totalPaid += fee.paidAmount || 0;
-        totalPending += fee.amount - (fee.paidAmount || 0);
         partialCount++;
         unpaidCount++;
       } else {
-        totalPending += fee.amount;
         unpaidCount++;
       }
     });
@@ -401,19 +473,12 @@ exports.getMonthlyFeeReport = async (req, res) => {
           paidStudents: paidCount,
           unpaidStudents: unpaidCount,
           partialStudents: partialCount,
-          totalAmount: totalAmount.toFixed(2),
-          totalCollected: totalPaid.toFixed(2),
-          totalPending: totalPending.toFixed(2),
-          collectionRate: fees.length > 0 ? ((paidCount / fees.length) * 100).toFixed(2) : 0,
         },
         fees: fees.filter(fee => fee.studentId).map(fee => ({
           studentName: fee.studentId.name,
           studentId: fee.studentId.studentId,
           fatherName: fee.studentId.fatherName || '',
           className: fee.studentId.classId ? fee.studentId.classId.className : 'No Class',
-          amount: fee.amount,
-          paidAmount: fee.paidAmount || 0,
-          pendingAmount: fee.amount - (fee.paidAmount || 0),
           status: fee.status,
           dueDate: fee.dueDate,
           paidDate: fee.paidDate,

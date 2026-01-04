@@ -1,8 +1,11 @@
+const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Exam = require('../models/Exam');
 const Fees = require('../models/Fees');
 const Announcement = require('../models/Announcement');
 const Notification = require('../models/Notification');
+const ResultCard = require('../models/ResultCard');
+const ClassExamResult = require('../models/ClassExamResult');
 
 // @desc    Get my attendance
 // @route   GET /api/student/attendance
@@ -17,6 +20,7 @@ exports.getMyAttendance = async (req, res) => {
     const totalDays = attendance.length;
     const presentDays = attendance.filter(a => a.status === 'present').length;
     const absentDays = attendance.filter(a => a.status === 'absent').length;
+    const leaveDays = attendance.filter(a => a.status === 'leave').length;
     const lateDays = attendance.filter(a => a.status === 'late').length;
     const attendancePercentage = totalDays > 0 ? (presentDays / totalDays) * 100 : 0;
 
@@ -27,6 +31,7 @@ exports.getMyAttendance = async (req, res) => {
         totalDays,
         presentDays,
         absentDays,
+        leaveDays,
         lateDays,
         attendancePercentage: attendancePercentage.toFixed(2),
       },
@@ -236,11 +241,29 @@ exports.getDashboardStats = async (req, res) => {
     twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
     const today = new Date();
 
-    const [attendance, exams, fees, announcements, newAnnouncements, studentFees] = await Promise.all([
-      Attendance.countDocuments({ studentId: req.user.id }),
-      Exam.countDocuments({
-        'results.studentId': req.user.id,
-        isPublished: true,
+    // Count unique exam name-year combinations from ClassExamResult for student's class
+    const studentForExams = await User.findById(req.user.id);
+    const classExamResults = studentForExams?.classId
+      ? await ClassExamResult.find({ classId: studentForExams.classId }).select('examName examYear')
+      : [];
+    const uniqueExams = new Set();
+    classExamResults.forEach(result => {
+      uniqueExams.add(`${result.examName}-${result.examYear}`);
+    });
+    const examCount = uniqueExams.size;
+
+    // Calculate current month attendance
+    const currentDate = new Date();
+    const currentMonth = currentDate.getMonth();
+    const currentYear = currentDate.getFullYear();
+    const startOfMonth = new Date(currentYear, currentMonth, 1);
+    const endOfMonth = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59, 999);
+
+    const [attendance, fees, announcements, newAnnouncements, studentFees] = await Promise.all([
+      Attendance.countDocuments({
+        studentId: req.user.id,
+        date: { $gte: startOfMonth, $lte: endOfMonth },
+        status: 'present'
       }),
       Fees.countDocuments({ studentId: req.user.id }),
       Announcement.countDocuments({
@@ -278,15 +301,27 @@ exports.getDashboardStats = async (req, res) => {
       }
     });
 
+    // Get student's class and teacher info
+    const student = await User.findById(req.user.id).populate({
+      path: 'classId',
+      populate: { path: 'teacherId', select: 'name' }
+    });
+    const classInfo = student?.classId ? {
+      className: student.classId.className || student.classId.name,
+      section: student.classId.section,
+      teacherName: student.classId.teacherId?.name || null,
+    } : null;
+
     res.json({
       success: true,
       data: {
         attendance,
-        exams,
+        exams: examCount,
         fees,
         announcements,
         newAnnouncements,
         overdueFees,
+        classInfo,
       },
     });
   } catch (error) {
@@ -413,8 +448,9 @@ exports.getMyMonthlyReport = async (req, res) => {
       },
     });
 
-    // Count present days (excluding Sundays)
+    // Count attendance stats for the month (excluding Sundays)
     let presentDays = 0;
+    let leaveDays = 0;
     let totalWorkingDays = 0;
     
     for (let day = 1; day <= daysInMonth; day++) {
@@ -429,8 +465,12 @@ exports.getMyMonthlyReport = async (req, res) => {
           const recordDate = new Date(a.date).toISOString().split('T')[0];
           return recordDate === dateStr;
         });
-        if (record && record.status === 'present') {
-          presentDays++;
+        if (record) {
+          if (record.status === 'present') {
+            presentDays++;
+          } else if (record.status === 'leave') {
+            leaveDays++;
+          }
         }
       }
     }
@@ -445,28 +485,39 @@ exports.getMyMonthlyReport = async (req, res) => {
       isPublished: true,
     }).populate('classId', 'className');
 
-    // Calculate exam pass/fail status
-    let examStatus = 'No Exams';
-    let passedExams = 0;
-    let totalExams = exams.length;
+    // Process individual exam results
+    const examResults = exams.map(exam => {
+      const result = exam.results.find(r => r.studentId.toString() === student._id.toString());
+      let status = 'Not Attempted';
+      let percentage = 0;
 
-    if (exams.length > 0) {
-      exams.forEach(exam => {
-        const result = exam.results.find(r => r.studentId.toString() === student._id.toString());
-        if (result) {
-          const percentage = (result.marks / exam.totalMarks) * 100;
-          if (percentage >= 33) {
-            passedExams++;
-          }
-        }
-      });
-      
+      if (result) {
+        percentage = (result.marks / exam.totalMarks) * 100;
+        status = percentage >= 33 ? 'Pass' : 'Fail';
+      }
+
+      return {
+        examName: exam.examName,
+        examDate: exam.examDate,
+        status: status,
+        marks: result ? result.marks : 0,
+        totalMarks: exam.totalMarks,
+        percentage: Math.round(percentage),
+      };
+    });
+
+    // Calculate overall exam statistics
+    const passedExams = examResults.filter(exam => exam.status === 'Pass').length;
+    const totalExams = examResults.length;
+    let overallStatus = 'No Exams';
+
+    if (totalExams > 0) {
       if (passedExams === totalExams) {
-        examStatus = 'Pass';
+        overallStatus = 'Pass';
       } else if (passedExams > 0) {
-        examStatus = 'Partial Pass';
+        overallStatus = 'Partial Pass';
       } else {
-        examStatus = 'Fail';
+        overallStatus = 'Fail';
       }
     }
 
@@ -477,8 +528,10 @@ exports.getMyMonthlyReport = async (req, res) => {
       year: reportYear,
     });
 
-    // Check if fees were paid on time
+    // Check if fees were paid on time & overall status (Paid / Unpaid / N/A)
     let feesOnTime = 'N/A';
+    let feesStatus = 'N/A';
+
     if (fees.length > 0) {
       const allPaidOnTime = fees.every(fee => {
         if (fee.status === 'paid' && fee.paidDate) {
@@ -487,6 +540,9 @@ exports.getMyMonthlyReport = async (req, res) => {
         return false;
       });
       feesOnTime = allPaidOnTime ? 'Yes' : 'No';
+
+      const hasUnpaid = fees.some(fee => fee.status !== 'paid');
+      feesStatus = hasUnpaid ? 'Unpaid' : 'Paid';
     }
 
     // Month name
@@ -509,24 +565,90 @@ exports.getMyMonthlyReport = async (req, res) => {
           year: reportYear,
           attendance: {
             present: presentDays,
+            leave: leaveDays,
             total: totalWorkingDays,
             percentage: totalWorkingDays > 0 ? Math.round((presentDays / totalWorkingDays) * 100) : 0,
           },
           exams: {
-            status: examStatus,
+            status: overallStatus,
             passed: passedExams,
             total: totalExams,
+            results: examResults,
           },
           fees: {
             onTime: feesOnTime,
-            total: fees.length,
-            paid: fees.filter(f => f.status === 'paid').length,
+            status: feesStatus,
           },
         },
       },
     });
   } catch (error) {
     console.error('Monthly report error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Get my result cards
+// @route   GET /api/student/result-cards
+// @access  Private/Student
+exports.getMyResultCards = async (req, res) => {
+  try {
+    const resultCards = await ResultCard.find({ studentId: req.user.id })
+      .populate({
+        path: 'classId',
+        select: 'className section',
+        populate: { path: 'teacherId', select: 'name' }
+      })
+      .sort({ examYear: -1, createdAt: -1 });
+
+    res.json({
+      success: true,
+      count: resultCards.length,
+      data: resultCards,
+    });
+  } catch (error) {
+    console.error('Get my result cards error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Get class exam results for my class
+// @route   GET /api/student/class-exam-results
+// @access  Private/Student
+exports.getMyClassExamResults = async (req, res) => {
+  try {
+    const user = await require('../models/User').findById(req.user.id);
+    if (!user || !user.classId) {
+      return res.json({
+        success: true,
+        count: 0,
+        data: [],
+      });
+    }
+
+    const classExamResults = await ClassExamResult.find({ classId: user.classId })
+      .populate({
+        path: 'classId',
+        select: 'className section',
+        populate: { path: 'teacherId', select: 'name' }
+      })
+      .sort({ examYear: -1, createdAt: -1 });
+
+    res.json({
+      success: true,
+      count: classExamResults.length,
+      data: classExamResults,
+    });
+  } catch (error) {
+    console.error('Get my class exam results error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error',

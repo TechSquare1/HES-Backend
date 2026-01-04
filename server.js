@@ -21,14 +21,15 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/mkbw';
 
 mongoose.connect(mongoURI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-  serverSelectionTimeoutMS: 30000, // 30 seconds
-  socketTimeoutMS: 45000, // 45 seconds
-  connectTimeoutMS: 30000, // 30 seconds
-  maxPoolSize: 10, // Maintain up to 10 socket connections
+  serverSelectionTimeoutMS: 60000, // 60 seconds - give more time to find primary
+  socketTimeoutMS: 60000,
+  connectTimeoutMS: 60000,
+  maxPoolSize: 10,
   retryWrites: true,
-  w: 'majority'
+  retryReads: true,
+  w: 'majority',
+  readPreference: 'primary', // FORCE primary node for all operations
+  directConnection: false, // Ensure replica set discovery
 })
 .then(() => {
   console.log('✅ MongoDB Connected Successfully');
@@ -44,7 +45,20 @@ mongoose.connect(mongoURI, {
   console.error('4. Try different network (mobile hotspot)');
   console.error('5. Disable VPN/Proxy if enabled');
   console.error('6. Check your password and username\n');
-  process.exit(1); // Exit on connection failure
+  // Don't exit - let the server retry
+});
+
+// MongoDB connection event handlers
+mongoose.connection.on('error', (err) => {
+  console.error('❌ MongoDB error:', err.message);
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.log('⚠️ MongoDB disconnected. Attempting to reconnect...');
+});
+
+mongoose.connection.on('reconnected', () => {
+  console.log('✅ MongoDB reconnected successfully');
 });
 
 // Routes
@@ -62,6 +76,7 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/teacher', require('./routes/teacher'));
 app.use('/api/student', require('./routes/student'));
 app.use('/api/nazim', require('./routes/nazim'));
+app.use('/api/gallery', require('./routes/gallery'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -86,4 +101,3 @@ app.listen(PORT, HOST, () => {
   console.log(`🌐 Accessible from network at: http://localhost:${PORT} or http://YOUR_IP:${PORT}`);
   console.log(`📱 Update frontend api.js with your computer's IP address`);
 });
-

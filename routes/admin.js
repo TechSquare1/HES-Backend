@@ -4,6 +4,9 @@ const {
   getAllTeachers,
   getAllStudents,
   getAllClasses,
+  createClass,
+  updateClass,
+  deleteClass,
   createTeacher,
   createStudent,
   getAllNazims,
@@ -21,6 +24,21 @@ const {
   deleteAnnouncement,
   getDashboardStats,
   getMonthlyReport,
+  getMonthlyAttendanceReport,
+  getYearlyAttendanceReport,
+  getMonthlyFeesReport,
+  getYearlyFeesReport,
+  getClassProgressReportAdmin,
+  getExamReports,
+  getExamReport,
+  getExamsByClass,
+  saveResultCard,
+  getStudentResultCards,
+  getClassResultCards,
+  deleteResultCard,
+  saveClassExamResult,
+  getClassExamResults,
+  deleteClassExamResult,
 } = require('../controllers/adminController');
 const { protect, authorize } = require('../middleware/auth');
 const { uploadPDF } = require('../middleware/upload');
@@ -47,6 +65,9 @@ router.put('/students/:id', updateStudent);
 
 // Class Management
 router.get('/classes', getAllClasses);
+router.post('/classes', createClass);
+router.put('/classes/:id', updateClass);
+router.delete('/classes/:id', deleteClass);
 
 // User Management
 router.put('/users/:id', updateUser);
@@ -70,6 +91,25 @@ router.delete('/announcements/:id', deleteAnnouncement);
 
 // Reports
 router.get('/reports/monthly', getMonthlyReport);
+router.get('/reports/attendance', getMonthlyAttendanceReport);
+router.get('/reports/attendance/yearly', getYearlyAttendanceReport);
+router.get('/reports/fees', getMonthlyFeesReport);
+router.get('/reports/fees/yearly', getYearlyFeesReport);
+router.get('/reports/class', getClassProgressReportAdmin);
+router.get('/reports/exams', getExamReports);
+router.get('/exam-report/:examId', getExamReport);
+router.get('/exams/class/:classId', getExamsByClass);
+
+// Result Cards
+router.post('/result-cards', saveResultCard);
+router.get('/result-cards/student/:studentId', getStudentResultCards);
+router.get('/result-cards/class/:classId', getClassResultCards);
+router.delete('/result-cards/:id', deleteResultCard);
+
+// Class Exam Results
+router.post('/class-exam-results', saveClassExamResult);
+router.get('/class-exam-results', getClassExamResults);
+router.delete('/class-exam-results/:id', deleteClassExamResult);
 
 module.exports = router;
 

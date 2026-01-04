@@ -10,6 +10,8 @@ const {
   getMyNotifications,
   markNotificationAsRead,
   getMyMonthlyReport,
+  getMyResultCards,
+  getMyClassExamResults,
 } = require('../controllers/studentController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -35,6 +37,10 @@ router.put('/notifications/:id/read', protect, authorize('student'), markNotific
 
 // Monthly Report
 router.get('/monthly-report', protect, authorize('student'), getMyMonthlyReport);
+
+// Result Cards
+router.get('/result-cards', protect, authorize('student'), getMyResultCards);
+router.get('/class-exam-results', protect, authorize('student'), getMyClassExamResults);
 
 module.exports = router;
 
