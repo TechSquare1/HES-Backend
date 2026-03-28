@@ -419,9 +419,6 @@ exports.getMonthlyFeeReport = async (req, res) => {
     const startDate = new Date(reportYear, reportMonth - 1, 1);
     const endDate = new Date(reportYear, reportMonth, 0, 23, 59, 59);
 
-    console.log('Fee Report Query - Month:', reportMonth, 'Year:', reportYear);
-    console.log('Date Range:', startDate, 'to', endDate);
-
     // Get all fees - search by dueDate range (primary) or month/year fields
     const fees = await Fees.find({
       $or: [
@@ -436,8 +433,6 @@ exports.getMonthlyFeeReport = async (req, res) => {
       select: 'name studentId fatherName classId',
       populate: { path: 'classId', select: 'className' }
     });
-
-    console.log('Found fees:', fees.length);
 
     // Calculate statistics (simplified - focus on paid/unpaid counts)
     let paidCount = 0;

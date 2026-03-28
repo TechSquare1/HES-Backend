@@ -719,7 +719,6 @@ exports.getAnnouncements = async (req, res) => {
 exports.getClassProgressReport = async (req, res) => {
   try {
     const { classId, type = 'monthly', month, year } = req.query;
-    console.log('Class Progress Report Request:', { classId, type, month, year });
 
     if (!classId) {
       return res.status(400).json({
@@ -744,30 +743,34 @@ exports.getClassProgressReport = async (req, res) => {
     let startDate;
     let endDate;
     let periodLabel;
+    let reportMonthForAttendance = null;
 
     if (type === 'yearly') {
       startDate = new Date(reportYear, 0, 1);
       endDate = new Date(reportYear, 11, 31, 23, 59, 59, 999);
       periodLabel = `${reportYear}`;
     } else {
-      const reportMonth = month ? parseInt(month, 10) : now.getMonth() + 1;
-      console.log('Report month from param:', month, 'parsed:', reportMonth);
-      if (reportMonth < 1 || reportMonth > 12) {
+      reportMonthForAttendance = month ? parseInt(month, 10) : now.getMonth() + 1;
+      if (reportMonthForAttendance < 1 || reportMonthForAttendance > 12) {
         return res.status(400).json({
           success: false,
           message: 'Invalid month',
         });
       }
-      startDate = new Date(reportYear, reportMonth - 1, 1);
-      endDate = new Date(reportYear, reportMonth, 0, 23, 59, 59, 999);
+      startDate = new Date(reportYear, reportMonthForAttendance - 1, 1);
+      endDate = new Date(reportYear, reportMonthForAttendance, 0, 23, 59, 59, 999);
       const monthNames = [
         'January', 'February', 'March', 'April', 'May', 'June',
         'July', 'August', 'September', 'October', 'November', 'December'
       ];
-      periodLabel = `${monthNames[reportMonth - 1]} ${reportYear}`;
+      periodLabel = `${monthNames[reportMonthForAttendance - 1]} ${reportYear}`;
     }
 
-    console.log('Date range:', { startDate, endDate, periodLabel });
+    // Fee snapshot: monthly uses selected month/year; yearly uses today's month number
+    // in the *selected report year* (e.g. report year 2025 + March → March 2025), not whole-year totals.
+    const feesMonth =
+      type === 'yearly' ? now.getMonth() + 1 : reportMonthForAttendance;
+    const feesYear = reportYear;
 
     // Attendance for this class and period
     const attendanceRecords = await Attendance.find({
@@ -786,46 +789,33 @@ exports.getClassProgressReport = async (req, res) => {
     const classStudents = await User.find({ classId: classId, role: 'student' });
     const studentIds = classStudents.map(s => s._id);
 
-    // Fees for students in this class and period
-    let feesQuery = {
+    // Fees: single month (selected month for monthly, current month for yearly report)
+    const feesQuery = {
       studentId: { $in: studentIds },
-      year: reportYear,
+      year: feesYear,
+      month: feesMonth.toString(),
     };
-
-    if (type === 'monthly') {
-      const reportMonth = month ? parseInt(month, 10) : now.getMonth() + 1;
-      feesQuery.month = reportMonth.toString();
-    }
 
     const feesRecords = await Fees.find(feesQuery);
 
-    // Count unique students who have paid vs unpaid
-    const paidStudentIds = new Set(
-      feesRecords
-        .filter(f => f.status === 'paid')
-        .map(f => f.studentId.toString())
-    );
-
-    const unpaidFeesRecords = feesRecords.filter(f => f.status !== 'paid');
-    const unpaidStudentIds = new Set();
-
-    // For unpaid, we need to check which students have NO paid fees in the period
-    // First, get all students who have any fee record (paid or unpaid) in the period
-    const studentsWithFees = new Set(
-      feesRecords.map(f => f.studentId.toString())
-    );
-
-    // Students with no fee records at all in this period are considered unpaid
-    const studentsWithoutAnyFees = studentIds.filter(id => !studentsWithFees.has(id.toString()));
-
-    // Students who have unpaid fee records
-    unpaidFeesRecords.forEach(f => unpaidStudentIds.add(f.studentId.toString()));
-
-    // Combine students without any fees + students with unpaid fees
-    const allUnpaidStudentIds = new Set([...studentsWithoutAnyFees, ...Array.from(unpaidStudentIds)]);
-
-    const paidCount = paidStudentIds.size;
-    const unpaidCount = allUnpaidStudentIds.size;
+    /**
+     * One bucket per student for a single month (feesMonth/feesYear):
+     * - "paid": every fee row for that month is paid (and at least one row exists)
+     * - "unpaid": no row for that month, OR any row is pending/partial
+     */
+    let paidCount = 0;
+    let unpaidCount = 0;
+    for (const id of studentIds) {
+      const sid = id.toString();
+      const records = feesRecords.filter((f) => f.studentId.toString() === sid);
+      if (records.length === 0) {
+        unpaidCount += 1;
+        continue;
+      }
+      const allPaid = records.every((f) => f.status === 'paid');
+      if (allPaid) paidCount += 1;
+      else unpaidCount += 1;
+    }
 
     // Get students in this class with detailed information
     const students = await User.find({
@@ -860,18 +850,14 @@ exports.getClassProgressReport = async (req, res) => {
           records: studentAttendance
         });
 
-        // Get fees for this student in this period
-        let feesQuery = {
+        // Get fees for this student (same month as class-level fee summary)
+        const studentFeesQuery = {
           studentId: student._id,
-          year: reportYear,
+          year: feesYear,
+          month: feesMonth.toString(),
         };
 
-        if (type === 'monthly') {
-          const reportMonth = month ? parseInt(month, 10) : now.getMonth() + 1;
-          feesQuery.month = reportMonth.toString();
-        }
-
-        const studentFees = await Fees.find(feesQuery);
+        const studentFees = await Fees.find(studentFeesQuery);
         const paidFees = studentFees.filter(f => f.status === 'paid').length;
         const unpaidFees = studentFees.filter(f => f.status !== 'paid').length;
 
@@ -920,9 +906,6 @@ exports.getClassProgressReport = async (req, res) => {
         }
       });
     });
-
-    console.log('Found exam names:', Array.from(examNames));
-    console.log('Processed students:', students.length);
 
     // Build detailed student records
     const studentRecords = students.map(student => {
@@ -987,6 +970,8 @@ exports.getClassProgressReport = async (req, res) => {
         fees: {
           paidCount,
           unpaidCount,
+          month: feesMonth,
+          year: feesYear,
         },
         exams: {
           examNames: Array.from(examNames),

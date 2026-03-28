@@ -13,7 +13,9 @@ const { getFileUrl } = require('../middleware/upload');
 // @access  Private/Admin
 exports.getAllTeachers = async (req, res) => {
   try {
-    const teachers = await User.find({ role: 'teacher' }).select('-password');
+    const teachers = await User.find({ role: 'teacher' })
+      .select('-password')
+      .populate('classes', 'className section');
     res.json({
       success: true,
       count: teachers.length,
@@ -1969,33 +1971,22 @@ exports.getClassProgressReportAdmin = async (req, res) => {
       studentId: { $in: cls.students || [] },
     });
 
-    // Count unique students who have paid vs unpaid
-    const paidStudentIds = new Set(
-      classFees
-        .filter(f => f.status === 'paid')
-        .map(f => f.studentId.toString())
-    );
-
-    const unpaidFeesRecords = classFees.filter(f => f.status === 'pending' || f.status === 'partial');
-    const unpaidStudentIds = new Set();
-
-    // For unpaid, we need to check which students have NO paid fees in the period
-    // First, get all students who have any fee record (paid or unpaid) in the period
-    const studentsWithFees = new Set(
-      classFees.map(f => f.studentId.toString())
-    );
-
-    // Students with no fee records at all in this period are considered unpaid
-    const studentsWithoutAnyFees = (cls.students || []).filter(id => !studentsWithFees.has(id.toString()));
-
-    // Students who have unpaid fee records
-    unpaidFeesRecords.forEach(f => unpaidStudentIds.add(f.studentId.toString()));
-
-    // Combine students without any fees + students with unpaid fees
-    const allUnpaidStudentIds = new Set([...studentsWithoutAnyFees, ...Array.from(unpaidStudentIds)]);
-
-    const paidFees = paidStudentIds.size;
-    const unpaidFees = allUnpaidStudentIds.size;
+    // One bucket per student (yearly + monthly): avoids double-counting when a student
+    // has both paid and unpaid fee rows in the same period.
+    const classStudentIds = cls.students || [];
+    let paidFees = 0;
+    let unpaidFees = 0;
+    for (const id of classStudentIds) {
+      const sid = id.toString();
+      const records = classFees.filter((f) => f.studentId.toString() === sid);
+      if (records.length === 0) {
+        unpaidFees += 1;
+        continue;
+      }
+      const allPaid = records.every((f) => f.status === 'paid');
+      if (allPaid) paidFees += 1;
+      else unpaidFees += 1;
+    }
 
     // Calculate overall progress rating
     const totalStudents = cls.students ? cls.students.length : 0;

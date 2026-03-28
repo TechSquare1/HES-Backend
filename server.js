@@ -70,13 +70,17 @@ app.get('/', (req, res) => {
   });
 });
 
+// Health check for Railway (must respond quickly, no DB dependency)
+app.get('/health', (req, res) => {
+  res.status(200).json({ ok: true, timestamp: new Date().toISOString() });
+});
+
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/teacher', require('./routes/teacher'));
 app.use('/api/student', require('./routes/student'));
 app.use('/api/nazim', require('./routes/nazim'));
-app.use('/api/gallery', require('./routes/gallery'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {

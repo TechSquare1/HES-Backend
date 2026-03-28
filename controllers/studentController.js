@@ -620,32 +620,15 @@ exports.getMyResultCards = async (req, res) => {
   }
 };
 
-// @desc    Get class exam results for my class
+// @desc    Class-wide exam results (full class PDF) — not exposed to students; they only see their own result cards.
 // @route   GET /api/student/class-exam-results
 // @access  Private/Student
 exports.getMyClassExamResults = async (req, res) => {
   try {
-    const user = await require('../models/User').findById(req.user.id);
-    if (!user || !user.classId) {
-      return res.json({
-        success: true,
-        count: 0,
-        data: [],
-      });
-    }
-
-    const classExamResults = await ClassExamResult.find({ classId: user.classId })
-      .populate({
-        path: 'classId',
-        select: 'className section',
-        populate: { path: 'teacherId', select: 'name' }
-      })
-      .sort({ examYear: -1, createdAt: -1 });
-
     res.json({
       success: true,
-      count: classExamResults.length,
-      data: classExamResults,
+      count: 0,
+      data: [],
     });
   } catch (error) {
     console.error('Get my class exam results error:', error);
