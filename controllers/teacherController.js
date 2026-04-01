@@ -461,22 +461,12 @@ exports.addStudentToClass = async (req, res) => {
       });
     }
 
-    // Remove student from old class if exists
+    // Remove student from old class atomically
     if (student.classId) {
-      const oldClass = await Class.findById(student.classId);
-      if (oldClass) {
-        oldClass.students = oldClass.students.filter(
-          (id) => id.toString() !== student._id.toString()
-        );
-        await oldClass.save();
-      }
+      await Class.findByIdAndUpdate(student.classId, { $pull: { students: student._id } });
     }
-
-    // Add student to new class
-    if (!classObj.students.includes(student._id)) {
-      classObj.students.push(student._id);
-      await classObj.save();
-    }
+    // Add student to new class atomically
+    await Class.findByIdAndUpdate(classId, { $addToSet: { students: student._id } });
 
     // Update student's classId
     student.classId = classId;
@@ -545,22 +535,12 @@ exports.updateStudent = async (req, res) => {
         });
       }
 
-      // Remove student from old class
+      // Remove student from old class atomically
       if (student.classId) {
-        const oldClass = await Class.findById(student.classId);
-        if (oldClass) {
-          oldClass.students = oldClass.students.filter(
-            (id) => id.toString() !== student._id.toString()
-          );
-          await oldClass.save();
-        }
+        await Class.findByIdAndUpdate(student.classId, { $pull: { students: student._id } });
       }
-
-      // Add student to new class
-      if (!newClass.students.includes(student._id)) {
-        newClass.students.push(student._id);
-        await newClass.save();
-      }
+      // Add student to new class atomically
+      await Class.findByIdAndUpdate(classId, { $addToSet: { students: student._id } });
 
       student.classId = classId;
     }
@@ -615,11 +595,8 @@ exports.removeStudent = async (req, res) => {
         });
       }
 
-      // Remove student from class
-      classObj.students = classObj.students.filter(
-        (id) => id.toString() !== student._id.toString()
-      );
-      await classObj.save();
+      // Remove student from class atomically
+      await Class.findByIdAndUpdate(student.classId, { $pull: { students: student._id } });
 
       // Remove classId from student (but don't delete the student)
       student.classId = undefined;
