@@ -4,6 +4,15 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const path = require('path');
 
+process.on('unhandledRejection', (reason) => {
+  console.error('❌ Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught Exception:', err.message);
+  console.error(err.stack);
+});
+
 // Load environment variables
 dotenv.config();
 
@@ -12,7 +21,17 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
+
 app.use(express.urlencoded({ extended: true }));
+
+// Request logger
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} → ${res.statusCode} (${Date.now() - start}ms) IP:${req.ip}`);
+  });
+  next();
+});
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
