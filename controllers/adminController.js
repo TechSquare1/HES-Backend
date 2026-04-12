@@ -6,6 +6,7 @@ const Fees = require('../models/Fees');
 const Announcement = require('../models/Announcement');
 const ResultCard = require('../models/ResultCard');
 const ClassExamResult = require('../models/ClassExamResult');
+const ClassSchedule = require('../models/ClassSchedule');
 const { getFileUrl } = require('../middleware/upload');
 
 // @desc    Get all teachers
@@ -2219,15 +2220,18 @@ exports.getDashboardStats = async (req, res) => {
     const twoDaysAgo = new Date();
     twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
 
-    // Count unique exam name-year combinations from ClassExamResult
+    // Count unique exam name-year combinations
     const classExamResults = await ClassExamResult.find().select('examName examYear');
-    const uniqueExams = new Set();
-    classExamResults.forEach(result => {
-      uniqueExams.add(`${result.examName}-${result.examYear}`);
-    });
-    const examCount = uniqueExams.size;
+    const uniqueClassExams = new Set();
+    classExamResults.forEach(r => uniqueClassExams.add(`${r.examName}-${r.examYear}`));
+    const classResultCount = uniqueClassExams.size;
 
-    const [teachers, students, classes, nazims, announcements, newAnnouncements] = await Promise.all([
+    const resultCardResults = await ResultCard.find().select('examName examYear');
+    const uniqueResultCards = new Set();
+    resultCardResults.forEach(r => uniqueResultCards.add(`${r.examName}-${r.examYear}`));
+    const resultCardCount = uniqueResultCards.size;
+
+    const [teachers, students, classes, nazims, announcements, newAnnouncements, newClassExams, newResultCards] = await Promise.all([
       User.countDocuments({ role: 'teacher' }),
       User.countDocuments({ role: 'student' }),
       Class.countDocuments(),
@@ -2237,6 +2241,8 @@ exports.getDashboardStats = async (req, res) => {
         isActive: true,
         createdAt: { $gte: twoDaysAgo },
       }),
+      ClassExamResult.countDocuments({ createdAt: { $gte: twoDaysAgo } }),
+      ResultCard.countDocuments({ createdAt: { $gte: twoDaysAgo } }),
     ]);
 
     res.json({
@@ -2246,7 +2252,10 @@ exports.getDashboardStats = async (req, res) => {
         students,
         classes,
         nazims,
-        exams: examCount,
+        exams: classResultCount + resultCardCount,
+        classResults: classResultCount,
+        resultCards: resultCardCount,
+        newExams: newClassExams + newResultCards,
         announcements,
         newAnnouncements,
       },
@@ -2270,7 +2279,6 @@ exports.saveResultCard = async (req, res) => {
       classId,
       examName,
       examYear,
-      subjects,
       totalMarks,
       obtainedMarks,
       position,
@@ -2281,6 +2289,12 @@ exports.saveResultCard = async (req, res) => {
       htmlContent,
     } = req.body;
 
+    // subjects may arrive as a JSON string when sent via FormData
+    let subjects = req.body.subjects;
+    if (typeof subjects === 'string') {
+      try { subjects = JSON.parse(subjects); } catch (_) { /* keep as-is */ }
+    }
+
     if (!studentId || !classId || !examName || !examYear || !subjects || !htmlContent) {
       return res.status(400).json({
         success: false,
@@ -2288,20 +2302,23 @@ exports.saveResultCard = async (req, res) => {
       });
     }
 
+    const attachmentUrl = req.file ? getFileUrl(req, req.file) : null;
+
     const resultCard = await ResultCard.create({
       studentId,
       classId,
       examName,
-      examYear,
+      examYear: Number(examYear),
       subjects,
-      totalMarks,
-      obtainedMarks,
+      totalMarks: Number(totalMarks),
+      obtainedMarks: Number(obtainedMarks),
       position: position || '',
       date,
       practicalStatus: practicalStatus || 'کوئی نہیں',
       managerSignatureLabel: managerSignatureLabel || 'دستخط مدیر',
       signatureName: signatureName || '',
       htmlContent,
+      attachmentUrl,
       createdBy: req.user.id,
     });
 
@@ -2659,5 +2676,19 @@ exports.getExamReport = async (req, res) => {
       message: 'Server error',
       error: error.message,
     });
+  }
+};
+
+// @desc    Get all class schedules
+// @route   GET /api/admin/schedules
+// @access  Private/Admin
+exports.getAllSchedules = async (req, res) => {
+  try {
+    const schedules = await ClassSchedule.find()
+      .populate('classId', 'className section')
+      .populate('teacherId', 'name');
+    res.json({ success: true, data: schedules });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };

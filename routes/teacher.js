@@ -19,6 +19,8 @@ const {
   getClassProgressReport,
   getMyClassResultCards,
   getMyClassExamResults,
+  getClassSchedule,
+  upsertClassSchedule,
 } = require('../controllers/teacherController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -61,6 +63,10 @@ router.get('/announcements', getAnnouncements);
 // Result Cards
 router.get('/result-cards', getMyClassResultCards);
 router.get('/class-exam-results', getMyClassExamResults);
+
+// Class Schedule
+router.get('/schedule/:classId', getClassSchedule);
+router.put('/schedule/:classId', upsertClassSchedule);
 
 module.exports = router;
 

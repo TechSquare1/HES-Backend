@@ -12,6 +12,7 @@ const {
   getMyMonthlyReport,
   getMyResultCards,
   getMyClassExamResults,
+  getMySchedule,
 } = require('../controllers/studentController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -41,6 +42,9 @@ router.get('/monthly-report', protect, authorize('student'), getMyMonthlyReport)
 // Result Cards
 router.get('/result-cards', protect, authorize('student'), getMyResultCards);
 router.get('/class-exam-results', protect, authorize('student'), getMyClassExamResults);
+
+// Schedule
+router.get('/schedule', protect, authorize('student'), getMySchedule);
 
 module.exports = router;
 

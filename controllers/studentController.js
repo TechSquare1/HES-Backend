@@ -6,6 +6,7 @@ const Announcement = require('../models/Announcement');
 const Notification = require('../models/Notification');
 const ResultCard = require('../models/ResultCard');
 const ClassExamResult = require('../models/ClassExamResult');
+const ClassSchedule = require('../models/ClassSchedule');
 
 // @desc    Get my attendance
 // @route   GET /api/student/attendance
@@ -241,16 +242,31 @@ exports.getDashboardStats = async (req, res) => {
     twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
     const today = new Date();
 
-    // Count unique exam name-year combinations from ClassExamResult for student's class
+    // Count exam results for student's class
     const studentForExams = await User.findById(req.user.id);
-    const classExamResults = studentForExams?.classId
-      ? await ClassExamResult.find({ classId: studentForExams.classId }).select('examName examYear')
+    const studentClassId = studentForExams?.classId;
+
+    const classExamResults = studentClassId
+      ? await ClassExamResult.find({ classId: studentClassId }).select('examName examYear')
       : [];
-    const uniqueExams = new Set();
-    classExamResults.forEach(result => {
-      uniqueExams.add(`${result.examName}-${result.examYear}`);
-    });
-    const examCount = uniqueExams.size;
+    const uniqueClassExams = new Set();
+    classExamResults.forEach(r => uniqueClassExams.add(`${r.examName}-${r.examYear}`));
+    const classResultCount = uniqueClassExams.size;
+
+    const resultCardResults = studentClassId
+      ? await ResultCard.find({ classId: studentClassId }).select('examName examYear createdAt')
+      : [];
+    const uniqueResultCards = new Set();
+    resultCardResults.forEach(r => uniqueResultCards.add(`${r.examName}-${r.examYear}`));
+    const resultCardCount = uniqueResultCards.size;
+
+    const newExamDocs = [
+      ...resultCardResults.filter(r => r.createdAt >= twoDaysAgo),
+      ...classExamResults.length > 0
+        ? await ClassExamResult.find({ classId: studentClassId, createdAt: { $gte: twoDaysAgo } }).select('_id')
+        : [],
+    ];
+    const newExamsCount = newExamDocs.length;
 
     // Calculate current month attendance
     const currentDate = new Date();
@@ -316,7 +332,10 @@ exports.getDashboardStats = async (req, res) => {
       success: true,
       data: {
         attendance,
-        exams: examCount,
+        exams: classResultCount + resultCardCount,
+        classResults: classResultCount,
+        resultCards: resultCardCount,
+        newExams: newExamsCount,
         fees,
         announcements,
         newAnnouncements,
@@ -637,6 +656,24 @@ exports.getMyClassExamResults = async (req, res) => {
       message: 'Server error',
       error: error.message,
     });
+  }
+};
+
+// @desc    Get my class schedule
+// @route   GET /api/student/schedule
+// @access  Private/Student
+exports.getMySchedule = async (req, res) => {
+  try {
+    const student = await User.findById(req.user.id);
+    if (!student || !student.classId) {
+      return res.json({ success: true, data: null });
+    }
+    const schedule = await ClassSchedule.findOne({ classId: student.classId })
+      .populate('classId', 'className section')
+      .populate('teacherId', 'name');
+    res.json({ success: true, data: schedule });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 

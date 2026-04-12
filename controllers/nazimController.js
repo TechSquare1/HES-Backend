@@ -81,7 +81,11 @@ exports.getAllFees = async (req, res) => {
     }
 
     const fees = await Fees.find(query)
-      .populate('studentId', 'name studentId classId parentPhone')
+      .populate({
+        path: 'studentId',
+        select: 'name studentId classId parentPhone',
+        populate: { path: 'classId', select: 'className' },
+      })
       .sort({ dueDate: -1 });
 
     const today = new Date();
@@ -359,6 +363,37 @@ exports.deleteFee = async (req, res) => {
       message: 'Fee deleted successfully',
     });
   } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Bulk delete fee records
+// @route   POST /api/nazim/fees/bulk-delete
+// @access  Private/Nazim
+exports.bulkDeleteFees = async (req, res) => {
+  try {
+    const { feeIds } = req.body;
+
+    if (!feeIds || !Array.isArray(feeIds) || feeIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide an array of fee IDs to delete',
+      });
+    }
+
+    const result = await Fees.deleteMany({ _id: { $in: feeIds } });
+
+    res.json({
+      success: true,
+      message: `${result.deletedCount} fee record(s) deleted`,
+      data: { deletedCount: result.deletedCount },
+    });
+  } catch (error) {
+    console.error('Bulk delete fees error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error',

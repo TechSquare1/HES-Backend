@@ -6,6 +6,7 @@ const User = require('../models/User');
 const Announcement = require('../models/Announcement');
 const ResultCard = require('../models/ResultCard');
 const ClassExamResult = require('../models/ClassExamResult');
+const ClassSchedule = require('../models/ClassSchedule');
 
 // @desc    Get teacher's classes
 // @route   GET /api/teacher/classes
@@ -258,30 +259,29 @@ exports.markAttendance = async (req, res) => {
       const results = [];
       const Notification = require('../models/Notification');
       const absentNotifications = [];
-      
-      for (const item of attendanceList) {
-        try {
-          // Create date range for the entire day in UTC
-          const startOfDay = new Date(Date.UTC(
-            attendanceDate.getUTCFullYear(),
-            attendanceDate.getUTCMonth(),
-            attendanceDate.getUTCDate(),
-            0, 0, 0, 0
-          ));
-          const endOfDay = new Date(Date.UTC(
-            attendanceDate.getUTCFullYear(),
-            attendanceDate.getUTCMonth(),
-            attendanceDate.getUTCDate(),
-            23, 59, 59, 999
-          ));
 
+      // Pre-compute day boundaries once (same for every student)
+      const startOfDay = new Date(Date.UTC(
+        attendanceDate.getUTCFullYear(),
+        attendanceDate.getUTCMonth(),
+        attendanceDate.getUTCDate(),
+        0, 0, 0, 0
+      ));
+      const endOfDay = new Date(Date.UTC(
+        attendanceDate.getUTCFullYear(),
+        attendanceDate.getUTCMonth(),
+        attendanceDate.getUTCDate(),
+        23, 59, 59, 999
+      ));
+
+      for (const item of attendanceList) {
+        if (!item.studentId || !item.classId) continue; // skip invalid entries
+
+        try {
           const existingAttendance = await Attendance.findOne({
             studentId: item.studentId,
             classId: item.classId,
-            date: {
-              $gte: startOfDay,
-              $lt: endOfDay,
-            },
+            date: { $gte: startOfDay, $lte: endOfDay },
           });
 
           if (existingAttendance) {
@@ -299,25 +299,27 @@ exports.markAttendance = async (req, res) => {
             });
             results.push(newAttendance);
           }
+
+          if (item.status === 'absent') {
+            absentNotifications.push({
+              userId: item.studentId,
+              title: 'Absence Alert',
+              message: `You were marked absent on ${attendanceDate.toLocaleDateString()}`,
+              type: 'attendance',
+            });
+          }
         } catch (itemError) {
           console.error(`Error processing attendance for student ${item.studentId}:`, itemError);
-          // Continue processing other students even if one fails
-        }
-        
-        // Create absence notification
-        if (item.status === 'absent') {
-          absentNotifications.push({
-            userId: item.studentId,
-            title: 'Absence Alert',
-            message: `You were marked absent on ${attendanceDate.toLocaleDateString()}`,
-            type: 'attendance',
-          });
         }
       }
-      
-      // Insert absence notifications
-      if (absentNotifications.length > 0) {
-        await Notification.insertMany(absentNotifications);
+
+      // Best-effort notifications — never let this fail the attendance response
+      try {
+        if (absentNotifications.length > 0) {
+          await Notification.insertMany(absentNotifications);
+        }
+      } catch (notifErr) {
+        console.error('Non-fatal: failed to create absence notifications:', notifErr.message);
       }
 
       return res.status(201).json({
@@ -329,13 +331,20 @@ exports.markAttendance = async (req, res) => {
     }
 
     // Single attendance marking
-    const startOfDay = new Date(Date.UTC(
+    if (!studentId || !classId) {
+      return res.status(400).json({
+        success: false,
+        message: 'studentId and classId are required',
+      });
+    }
+
+    const startOfDaySingle = new Date(Date.UTC(
       attendanceDate.getUTCFullYear(),
       attendanceDate.getUTCMonth(),
       attendanceDate.getUTCDate(),
       0, 0, 0, 0
     ));
-    const endOfDay = new Date(Date.UTC(
+    const endOfDaySingle = new Date(Date.UTC(
       attendanceDate.getUTCFullYear(),
       attendanceDate.getUTCMonth(),
       attendanceDate.getUTCDate(),
@@ -345,10 +354,7 @@ exports.markAttendance = async (req, res) => {
     const existingAttendance = await Attendance.findOne({
       studentId,
       classId,
-      date: {
-        $gte: startOfDay,
-        $lt: endOfDay,
-      },
+      date: { $gte: startOfDaySingle, $lte: endOfDaySingle },
     });
 
     let attendance;
@@ -984,17 +990,22 @@ exports.getDashboardStats = async (req, res) => {
     const students = await User.find({ classId: { $in: classIds } });
     const studentIds = students.map(s => s._id);
 
-    // Count unique exam name-year combinations from ClassExamResult for teacher's classes
+    // Count unique exam name-year combinations
     const classExamResults = classIds.length > 0
       ? await ClassExamResult.find({ classId: { $in: classIds } }).select('examName examYear')
       : [];
-    const uniqueExams = new Set();
-    classExamResults.forEach(result => {
-      uniqueExams.add(`${result.examName}-${result.examYear}`);
-    });
-    const examCount = uniqueExams.size;
+    const uniqueClassExams = new Set();
+    classExamResults.forEach(r => uniqueClassExams.add(`${r.examName}-${r.examYear}`));
+    const classResultCount = uniqueClassExams.size;
 
-    const [myClasses, myStudents, newAnnouncements] = await Promise.all([
+    const resultCardResults = classIds.length > 0
+      ? await ResultCard.find({ classId: { $in: classIds } }).select('examName examYear')
+      : [];
+    const uniqueResultCards = new Set();
+    resultCardResults.forEach(r => uniqueResultCards.add(`${r.examName}-${r.examYear}`));
+    const resultCardCount = uniqueResultCards.size;
+
+    const [myClasses, myStudents, newAnnouncements, newClassExams, newResultCards] = await Promise.all([
       Class.countDocuments({ teacherId: req.user.id }),
       User.countDocuments({ classId: { $in: classIds } }),
       Announcement.countDocuments({ 
@@ -1005,6 +1016,12 @@ exports.getDashboardStats = async (req, res) => {
           { targetAudience: 'teachers' },
         ],
       }),
+      classIds.length > 0
+        ? ClassExamResult.countDocuments({ classId: { $in: classIds }, createdAt: { $gte: twoDaysAgo } })
+        : 0,
+      classIds.length > 0
+        ? ResultCard.countDocuments({ classId: { $in: classIds }, createdAt: { $gte: twoDaysAgo } })
+        : 0,
     ]);
 
     res.json({
@@ -1012,7 +1029,10 @@ exports.getDashboardStats = async (req, res) => {
       data: {
         classes: myClasses,
         students: myStudents,
-        exams: examCount,
+        exams: classResultCount + resultCardCount,
+        classResults: classResultCount,
+        resultCards: resultCardCount,
+        newExams: newClassExams + newResultCards,
         newAnnouncements,
       },
     });
@@ -1101,6 +1121,45 @@ exports.getMyClassExamResults = async (req, res) => {
       message: 'Failed to mark attendance. Please try again.',
       error: error.message,
     });
+  }
+};
+
+// ── Class Schedule ──────────────────────────────────────────────
+
+// @desc    Get schedule for a class
+// @route   GET /api/teacher/schedule/:classId
+// @access  Private/Teacher
+exports.getClassSchedule = async (req, res) => {
+  try {
+    const schedule = await ClassSchedule.findOne({
+      classId: req.params.classId,
+      teacherId: req.user.id,
+    });
+    res.json({ success: true, data: schedule });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
+// @desc    Create or update schedule for a class
+// @route   PUT /api/teacher/schedule/:classId
+// @access  Private/Teacher
+exports.upsertClassSchedule = async (req, res) => {
+  try {
+    const { from, to } = req.body;
+    if (!from || !to) {
+      return res.status(400).json({ success: false, message: 'from and to are required' });
+    }
+
+    const schedule = await ClassSchedule.findOneAndUpdate(
+      { classId: req.params.classId, teacherId: req.user.id },
+      { from, to },
+      { new: true, upsert: true, runValidators: true }
+    );
+
+    res.json({ success: true, message: 'Schedule saved', data: schedule });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 

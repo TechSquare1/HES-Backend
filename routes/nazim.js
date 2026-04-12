@@ -6,6 +6,7 @@ const {
   createFee,
   updateFee,
   deleteFee,
+  bulkDeleteFees,
   getAllStudents,
   getMonthlyFeeReport,
   bulkCreateFees,
@@ -23,6 +24,7 @@ router.get('/dashboard', getDashboardStats);
 router.get('/fees', getAllFees);
 router.post('/fees', createFee);
 router.post('/fees/bulk', bulkCreateFees);
+router.post('/fees/bulk-delete', bulkDeleteFees);
 router.put('/fees/:id', updateFee);
 router.delete('/fees/:id', deleteFee);
 

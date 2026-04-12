@@ -39,9 +39,10 @@ const {
   saveClassExamResult,
   getClassExamResults,
   deleteClassExamResult,
+  getAllSchedules,
 } = require('../controllers/adminController');
 const { protect, authorize } = require('../middleware/auth');
-const { uploadPDF } = require('../middleware/upload');
+const { uploadPDF, uploadImage } = require('../middleware/upload');
 
 // All routes require authentication and admin role
 router.use(protect);
@@ -101,7 +102,7 @@ router.get('/exam-report/:examId', getExamReport);
 router.get('/exams/class/:classId', getExamsByClass);
 
 // Result Cards
-router.post('/result-cards', saveResultCard);
+router.post('/result-cards', uploadImage, saveResultCard);
 router.get('/result-cards/student/:studentId', getStudentResultCards);
 router.get('/result-cards/class/:classId', getClassResultCards);
 router.delete('/result-cards/:id', deleteResultCard);
@@ -110,6 +111,9 @@ router.delete('/result-cards/:id', deleteResultCard);
 router.post('/class-exam-results', saveClassExamResult);
 router.get('/class-exam-results', getClassExamResults);
 router.delete('/class-exam-results/:id', deleteClassExamResult);
+
+// Class Schedules
+router.get('/schedules', getAllSchedules);
 
 module.exports = router;
 

@@ -67,6 +67,10 @@ const resultCardSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  attachmentUrl: {
+    type: String,
+    default: null,
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
