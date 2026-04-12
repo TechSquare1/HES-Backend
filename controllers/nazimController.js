@@ -10,10 +10,20 @@ exports.getDashboardStats = async (req, res) => {
     const currentMonth = (today.getMonth() + 1).toString(); // 1-12
     const currentYear = today.getFullYear();
 
-    // Get fees for current month only
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    const currentMonthName = monthNames[today.getMonth()];
+
+    // Get fees for current month (match both numeric "4" and name "April" formats)
     const currentMonthFees = await Fees.find({
-      month: currentMonth,
-      year: currentYear,
+      $or: [
+        { month: currentMonth, year: currentYear },
+        { month: currentMonthName, year: currentYear },
+        { month: currentMonth, year: currentYear.toString() },
+        { month: currentMonthName, year: currentYear.toString() },
+      ],
     }).populate('studentId', '_id');
 
     const totalStudents = await User.countDocuments({ role: 'student' });
@@ -512,7 +522,10 @@ exports.getMonthlyFeeReport = async (req, res) => {
           status: fee.status,
           dueDate: fee.dueDate,
           paidDate: fee.paidDate,
-        })),
+        })).sort((a, b) => {
+          const order = { paid: 0, partial: 1, pending: 2 };
+          return (order[a.status] ?? 2) - (order[b.status] ?? 2);
+        }),
       },
     });
   } catch (error) {

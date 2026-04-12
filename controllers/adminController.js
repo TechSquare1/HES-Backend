@@ -8,6 +8,7 @@ const ResultCard = require('../models/ResultCard');
 const ClassExamResult = require('../models/ClassExamResult');
 const ClassSchedule = require('../models/ClassSchedule');
 const { getFileUrl } = require('../middleware/upload');
+const fs = require('fs');
 
 // @desc    Get all teachers
 // @route   GET /api/admin/teachers
@@ -2302,7 +2303,17 @@ exports.saveResultCard = async (req, res) => {
       });
     }
 
-    const attachmentUrl = req.file ? getFileUrl(req, req.file) : null;
+    let attachmentUrl = null;
+    if (req.file) {
+      try {
+        const fileBuffer = fs.readFileSync(req.file.path);
+        const base64 = fileBuffer.toString('base64');
+        attachmentUrl = `data:${req.file.mimetype};base64,${base64}`;
+        fs.unlinkSync(req.file.path);
+      } catch (fileErr) {
+        console.error('Failed to convert attachment to base64:', fileErr);
+      }
+    }
 
     const resultCard = await ResultCard.create({
       studentId,
