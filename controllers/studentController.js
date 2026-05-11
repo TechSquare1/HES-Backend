@@ -242,31 +242,20 @@ exports.getDashboardStats = async (req, res) => {
     twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
     const today = new Date();
 
-    // Count exam results for student's class
     const studentForExams = await User.findById(req.user.id);
     const studentClassId = studentForExams?.classId;
 
-    const classExamResults = studentClassId
-      ? await ClassExamResult.find({ classId: studentClassId }).select('examName examYear')
-      : [];
-    const uniqueClassExams = new Set();
-    classExamResults.forEach(r => uniqueClassExams.add(`${r.examName}-${r.examYear}`));
-    const classResultCount = uniqueClassExams.size;
+    // Students only see their own result cards — not class-wide exam PDFs
+    const myResultCards = await ResultCard.find({ studentId: req.user.id })
+      .select('examName examYear createdAt');
+    const uniqueMyCardExams = new Set();
+    myResultCards.forEach((r) => uniqueMyCardExams.add(`${r.examName}-${r.examYear}`));
+    const resultCardCount = uniqueMyCardExams.size;
 
-    const resultCardResults = studentClassId
-      ? await ResultCard.find({ classId: studentClassId }).select('examName examYear createdAt')
-      : [];
-    const uniqueResultCards = new Set();
-    resultCardResults.forEach(r => uniqueResultCards.add(`${r.examName}-${r.examYear}`));
-    const resultCardCount = uniqueResultCards.size;
-
-    const newExamDocs = [
-      ...resultCardResults.filter(r => r.createdAt >= twoDaysAgo),
-      ...classExamResults.length > 0
-        ? await ClassExamResult.find({ classId: studentClassId, createdAt: { $gte: twoDaysAgo } }).select('_id')
-        : [],
-    ];
-    const newExamsCount = newExamDocs.length;
+    const newExamsCount = await ResultCard.countDocuments({
+      studentId: req.user.id,
+      createdAt: { $gte: twoDaysAgo },
+    });
 
     // Calculate current month attendance
     const currentDate = new Date();
@@ -320,20 +309,23 @@ exports.getDashboardStats = async (req, res) => {
     // Get student's class and teacher info
     const student = await User.findById(req.user.id).populate({
       path: 'classId',
-      populate: { path: 'teacherId', select: 'name' }
+      populate: { path: 'teacherId', select: 'name gender' },
     });
-    const classInfo = student?.classId ? {
-      className: student.classId.className || student.classId.name,
-      section: student.classId.section,
-      teacherName: student.classId.teacherId?.name || null,
-    } : null;
+    const classInfo = student?.classId
+      ? {
+          className: student.classId.className || student.classId.name,
+          section: student.classId.section,
+          teacherName: student.classId.teacherId?.name || null,
+          teacherGender: student.classId.teacherId?.gender || null,
+        }
+      : null;
 
     res.json({
       success: true,
       data: {
         attendance,
-        exams: classResultCount + resultCardCount,
-        classResults: classResultCount,
+        exams: resultCardCount,
+        classResults: 0,
         resultCards: resultCardCount,
         newExams: newExamsCount,
         fees,

@@ -10,6 +10,35 @@ const ClassSchedule = require('../models/ClassSchedule');
 const { getFileUrl } = require('../middleware/upload');
 const fs = require('fs');
 
+const USER_UPDATE_WHITELIST = {
+  teacher: ['name', 'teacherId', 'email', 'parentPhone', 'gender', 'classes', 'profileImage', 'isActive'],
+  nazim: ['name', 'nazimId', 'email', 'parentPhone', 'profileImage', 'isActive'],
+  admin: ['name', 'email', 'adminId', 'profileImage', 'isActive'],
+};
+
+function pickWhitelistedUserUpdate(role, body) {
+  const keys = USER_UPDATE_WHITELIST[role];
+  if (!keys) return null;
+  const out = {};
+  for (const k of keys) {
+    if (body[k] !== undefined) out[k] = body[k];
+  }
+  if (out.classes !== undefined && !Array.isArray(out.classes)) {
+    delete out.classes;
+  }
+  return out;
+}
+
+const ANNOUNCEMENT_UPDATE_KEYS = ['title', 'content', 'language', 'targetAudience', 'isActive', 'pdfUrl'];
+
+function pickWhitelistedAnnouncementUpdate(body) {
+  const out = {};
+  for (const k of ANNOUNCEMENT_UPDATE_KEYS) {
+    if (body[k] !== undefined) out[k] = body[k];
+  }
+  return out;
+}
+
 // @desc    Get all teachers
 // @route   GET /api/admin/teachers
 // @access  Private/Admin
@@ -79,13 +108,20 @@ exports.getAllStudents = async (req, res) => {
 // @access  Private/Admin
 exports.createTeacher = async (req, res) => {
   try {
-    const { name, teacherId, email, phone, classes } = req.body;
+    const { name, teacherId, email, phone, classes, gender } = req.body;
 
     // Basic validations
     if (!name || !teacherId) {
       return res.status(400).json({
         success: false,
         message: 'Please provide name and Teacher ID.',
+      });
+    }
+
+    if (!gender || !['male', 'female'].includes(gender)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide gender: male or female.',
       });
     }
 
@@ -162,6 +198,7 @@ exports.createTeacher = async (req, res) => {
       email: (email && email.trim() !== '') ? email.toLowerCase().trim() : undefined,
       password: defaultPassword,
       role: 'teacher',
+      gender,
       parentPhone: phone ? phone.trim() : undefined, // reuse parentPhone for phone
     });
 
@@ -414,8 +451,8 @@ exports.createNazim = async (req, res) => {
 exports.getAllClasses = async (req, res) => {
   try {
     const classes = await Class.find()
-      .populate('teacherId', 'name email teacherId')
-      .populate('students', 'name studentId')
+      .populate('teacherId', 'name email teacherId gender')
+      .populate('students', 'name studentId gender')
       .sort({ className: 1 });
 
     res.json({
@@ -438,7 +475,6 @@ exports.getAllClasses = async (req, res) => {
 exports.createClass = async (req, res) => {
   try {
     const { className, teacherId } = req.body;
-    console.log('Create class request:', { className, teacherId });
 
     if (!className) {
       return res.status(400).json({
@@ -461,9 +497,7 @@ exports.createClass = async (req, res) => {
 
     // Validate teacher if provided
     if (teacherId && teacherId.trim()) {
-      console.log('Validating teacher ID:', teacherId);
       const teacher = await User.findOne({ _id: teacherId, role: 'teacher' });
-      console.log('Teacher found:', teacher ? teacher.name : 'Not found');
       if (!teacher) {
         return res.status(400).json({
           success: false,
@@ -769,17 +803,42 @@ exports.updateStudent = async (req, res) => {
 // @access  Private/Admin
 exports.updateUser = async (req, res) => {
   try {
-    const user = await User.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    }).select('-password');
+    const existing = await User.findById(req.params.id).select('-password');
 
-    if (!user) {
+    if (!existing) {
       return res.status(404).json({
         success: false,
         message: 'User not found',
       });
     }
+
+    if (existing.role === 'student') {
+      return res.status(400).json({
+        success: false,
+        message: 'Use PUT /api/admin/students/:id to update student accounts.',
+      });
+    }
+
+    const payload = pickWhitelistedUserUpdate(existing.role, req.body);
+    if (payload === null) {
+      return res.status(400).json({
+        success: false,
+        message: 'This account role cannot be updated through this endpoint.',
+      });
+    }
+
+    if (Object.keys(payload).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid fields to update.',
+      });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { $set: payload },
+      { new: true, runValidators: true }
+    ).select('-password');
 
     res.json({
       success: true,
@@ -1031,9 +1090,17 @@ exports.getAllAnnouncements = async (req, res) => {
 // @access  Private/Admin
 exports.updateAnnouncement = async (req, res) => {
   try {
+    const payload = pickWhitelistedAnnouncementUpdate(req.body);
+    if (Object.keys(payload).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid fields to update.',
+      });
+    }
+
     const announcement = await Announcement.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      { $set: payload },
       { new: true, runValidators: true }
     );
 
@@ -2253,10 +2320,11 @@ exports.getDashboardStats = async (req, res) => {
         students,
         classes,
         nazims,
-        exams: classResultCount + resultCardCount,
+        // Main tile: class-level results only (avoid summing with individual cards)
+        exams: classResultCount,
         classResults: classResultCount,
         resultCards: resultCardCount,
-        newExams: newClassExams + newResultCards,
+        newExams: newClassExams,
         announcements,
         newAnnouncements,
       },

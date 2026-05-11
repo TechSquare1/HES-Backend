@@ -15,7 +15,7 @@ exports.getMyClasses = async (req, res) => {
   try {
     const classes = await Class.find({ teacherId: req.user.id })
       .populate('students', 'name studentId')
-      .populate('teacherId', 'name');
+      .populate('teacherId', 'name gender');
 
     res.json({
       success: true,
@@ -987,15 +987,10 @@ exports.getDashboardStats = async (req, res) => {
 
     const classes = await Class.find({ teacherId: req.user.id });
     const classIds = classes.map(c => c._id);
-    const students = await User.find({ classId: { $in: classIds } });
-    const studentIds = students.map(s => s._id);
 
-    // Count unique exam name-year combinations
-    const classExamResults = classIds.length > 0
-      ? await ClassExamResult.find({ classId: { $in: classIds } }).select('examName examYear')
-      : [];
+    const allClassExamResults = await ClassExamResult.find().select('examName examYear');
     const uniqueClassExams = new Set();
-    classExamResults.forEach(r => uniqueClassExams.add(`${r.examName}-${r.examYear}`));
+    allClassExamResults.forEach((r) => uniqueClassExams.add(`${r.examName}-${r.examYear}`));
     const classResultCount = uniqueClassExams.size;
 
     const resultCardResults = classIds.length > 0
@@ -1004,6 +999,10 @@ exports.getDashboardStats = async (req, res) => {
     const uniqueResultCards = new Set();
     resultCardResults.forEach(r => uniqueResultCards.add(`${r.examName}-${r.examYear}`));
     const resultCardCount = uniqueResultCards.size;
+
+    const uniqueExamKeysAll = new Set();
+    uniqueClassExams.forEach((k) => uniqueExamKeysAll.add(k));
+    uniqueResultCards.forEach((k) => uniqueExamKeysAll.add(k));
 
     const [myClasses, myStudents, newAnnouncements, newClassExams, newResultCards] = await Promise.all([
       Class.countDocuments({ teacherId: req.user.id }),
@@ -1016,9 +1015,7 @@ exports.getDashboardStats = async (req, res) => {
           { targetAudience: 'teachers' },
         ],
       }),
-      classIds.length > 0
-        ? ClassExamResult.countDocuments({ classId: { $in: classIds }, createdAt: { $gte: twoDaysAgo } })
-        : 0,
+      ClassExamResult.countDocuments({ createdAt: { $gte: twoDaysAgo } }),
       classIds.length > 0
         ? ResultCard.countDocuments({ classId: { $in: classIds }, createdAt: { $gte: twoDaysAgo } })
         : 0,
@@ -1029,7 +1026,7 @@ exports.getDashboardStats = async (req, res) => {
       data: {
         classes: myClasses,
         students: myStudents,
-        exams: classResultCount + resultCardCount,
+        exams: uniqueExamKeysAll.size,
         classResults: classResultCount,
         resultCards: resultCardCount,
         newExams: newClassExams + newResultCards,
@@ -1092,14 +1089,10 @@ exports.getMyClassExamResults = async (req, res) => {
   try {
     const { classId, examName, examYear } = req.query;
 
-    // Get teacher's classes
-    const classes = await Class.find({ teacherId: req.user.id });
-    const classIds = classes.map((c) => c._id);
-
-    const query = { classId: { $in: classIds } };
+    const query = {};
     if (classId) query.classId = classId;
     if (examName) query.examName = examName;
-    if (examYear) query.examYear = parseInt(examYear);
+    if (examYear) query.examYear = parseInt(examYear, 10);
 
     const classExamResults = await ClassExamResult.find(query)
       .populate({

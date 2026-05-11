@@ -16,6 +16,13 @@ process.on('uncaughtException', (err) => {
 // Load environment variables
 dotenv.config();
 
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.JWT_SECRET || String(process.env.JWT_SECRET).length < 24) {
+    console.error('FATAL: Set JWT_SECRET (24+ characters) when NODE_ENV=production.');
+    process.exit(1);
+  }
+}
+
 const app = express();
 
 // Middleware

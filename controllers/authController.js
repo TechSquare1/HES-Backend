@@ -7,7 +7,42 @@ const { getFileUrl } = require('../middleware/upload');
 // @access  Public
 exports.register = async (req, res) => {
   try {
-    const { email, password, name, role, studentId, parentPhone, classId } = req.body;
+    if (process.env.ALLOW_PUBLIC_REGISTRATION !== 'true') {
+      return res.status(403).json({
+        success: false,
+        message: 'Registration is disabled. Ask an administrator to create your account.',
+      });
+    }
+
+    const { email, password, name, studentId, parentPhone, classId, fatherName, gender } = req.body;
+
+    // Self-service registration is student-only (never trust client-supplied role for staff)
+    const role = 'student';
+
+    if (!name || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name and password are required',
+      });
+    }
+    if (!studentId || !String(studentId).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student ID is required',
+      });
+    }
+    if (!fatherName || !String(fatherName).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Father name is required',
+      });
+    }
+    if (!parentPhone || !String(parentPhone).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Parent phone is required',
+      });
+    }
 
     // Check if user exists by email (if provided)
     if (email) {
@@ -31,15 +66,17 @@ exports.register = async (req, res) => {
       }
     }
 
-    // Create user
+    // Create user (student only)
     const user = await User.create({
       email: email ? email.toLowerCase().trim() : undefined,
       password,
-      name,
+      name: String(name).trim(),
       role,
-      studentId: role === 'student' ? studentId : undefined,
-      parentPhone: role === 'student' ? parentPhone : undefined,
-      classId: role === 'student' ? classId : undefined,
+      studentId: String(studentId).trim(),
+      parentPhone: String(parentPhone).trim(),
+      classId: classId || undefined,
+      fatherName: String(fatherName).trim(),
+      gender: gender === 'male' || gender === 'female' ? gender : undefined,
     });
 
     if (user) {
@@ -176,6 +213,7 @@ exports.getMe = async (req, res) => {
           adminId: user.adminId,
           profileImage: user.profileImage,
           parentPhone: user.parentPhone,
+          fatherName: user.fatherName,
           classId: user.classId,
           gender: user.gender,
         },
@@ -195,7 +233,7 @@ exports.getMe = async (req, res) => {
 // @access  Private
 exports.updateProfile = async (req, res) => {
   try {
-    const { name, email, parentPhone, adminId } = req.body;
+    const { name, email, parentPhone, adminId, fatherName, gender } = req.body;
     // Updated for GCP Cloud Storage support (async) - old: synchronous local file URL
     const profileImage = req.file ? await getFileUrl(req, req.file) : undefined;
 
@@ -208,6 +246,30 @@ exports.updateProfile = async (req, res) => {
     if (profileImage) updateData.profileImage = profileImage;
     if (parentPhone) updateData.parentPhone = parentPhone;
     if (adminId && req.user.role === 'admin' && adminId !== currentUser.adminId) updateData.adminId = adminId;
+    if (req.user.role === 'student' && fatherName !== undefined && fatherName !== null) {
+      const trimmed = String(fatherName).trim();
+      if (!trimmed) {
+        return res.status(400).json({
+          success: false,
+          message: 'Parent name is required',
+        });
+      }
+      updateData.fatherName = trimmed;
+    }
+
+    if (['teacher', 'nazim', 'admin'].includes(req.user.role) && gender !== undefined && gender !== null) {
+      const raw = String(gender).trim().toLowerCase();
+      if (raw === '') {
+        // omit — keep existing gender
+      } else if (['male', 'female'].includes(raw)) {
+        updateData.gender = raw;
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid gender',
+        });
+      }
+    }
 
     const user = await User.findByIdAndUpdate(req.user.id, updateData, {
       new: true,
@@ -229,6 +291,8 @@ exports.updateProfile = async (req, res) => {
           adminId: user.adminId,
           profileImage: user.profileImage,
           parentPhone: user.parentPhone,
+          fatherName: user.fatherName,
+          gender: user.gender,
         },
       },
     });
