@@ -90,6 +90,13 @@ const userSchema = new mongoose.Schema({
     sparse: true,
     trim: true,
   },
+  feeScope: {
+    type: String,
+    enum: ['male', 'female'],
+    default: function() {
+      return this.role === 'nazim' ? 'male' : undefined;
+    },
+  },
   classId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Class',

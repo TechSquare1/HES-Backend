@@ -179,6 +179,7 @@ exports.login = async (req, res) => {
           adminId: user.adminId,
           profileImage: user.profileImage,
           gender: user.gender,
+          feeScope: user.role === 'nazim' ? (user.feeScope || 'male') : undefined,
         },
       },
     });
@@ -216,6 +217,7 @@ exports.getMe = async (req, res) => {
           fatherName: user.fatherName,
           classId: user.classId,
           gender: user.gender,
+          feeScope: user.role === 'nazim' ? (user.feeScope || 'male') : undefined,
         },
       },
     });
@@ -293,6 +295,7 @@ exports.updateProfile = async (req, res) => {
           parentPhone: user.parentPhone,
           fatherName: user.fatherName,
           gender: user.gender,
+          feeScope: user.role === 'nazim' ? (user.feeScope || 'male') : undefined,
         },
       },
     });

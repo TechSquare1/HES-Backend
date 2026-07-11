@@ -12,7 +12,7 @@ const fs = require('fs');
 
 const USER_UPDATE_WHITELIST = {
   teacher: ['name', 'teacherId', 'email', 'parentPhone', 'gender', 'classes', 'profileImage', 'isActive'],
-  nazim: ['name', 'nazimId', 'email', 'parentPhone', 'profileImage', 'isActive'],
+  nazim: ['name', 'nazimId', 'email', 'parentPhone', 'profileImage', 'isActive', 'feeScope'],
   admin: ['name', 'email', 'adminId', 'profileImage', 'isActive'],
 };
 
@@ -366,7 +366,8 @@ exports.createStudent = async (req, res) => {
 // @access  Private/Admin
 exports.createNazim = async (req, res) => {
   try {
-    const { name, nazimId, email, phone } = req.body;
+    const { name, nazimId, email, phone, feeScope } = req.body;
+    const resolvedFeeScope = feeScope === 'female' ? 'female' : 'male';
 
     // Validate required fields
     if (!name || !nazimId) {
@@ -414,7 +415,8 @@ exports.createNazim = async (req, res) => {
       password: defaultPassword,
       role: 'nazim',
       nazimId: trimmedNazimId,
-      parentPhone: phone ? phone.trim() : undefined, // reuse existing phone field
+      parentPhone: phone ? phone.trim() : undefined,
+      feeScope: resolvedFeeScope,
     });
 
     res.status(201).json({
