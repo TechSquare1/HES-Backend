@@ -24,7 +24,8 @@ async function findFeeForStudentMonth(studentId, reportMonth, reportYear) {
   });
 }
 
-async function ensureCurrentMonthFeesForStudents(studentIds, reportMonth, reportYear) {
+/** Ensure unpaid fee rows exist for the given students + month/year (any month). */
+async function ensureFeesForStudents(studentIds, reportMonth, reportYear) {
   if (!studentIds.length) return 0;
 
   const dueDate = dueDateForMonth(reportMonth, reportYear);
@@ -91,7 +92,7 @@ exports.getDashboardStats = async (req, res) => {
     const totalStudents = scopedIds.length;
 
     if (isCurrentCalendarMonth(reportMonth, reportYear) && scopedIds.length > 0) {
-      await ensureCurrentMonthFeesForStudents(scopedIds, reportMonth, reportYear);
+      await ensureFeesForStudents(scopedIds, reportMonth, reportYear);
     }
 
     const currentMonthFees = await Fees.find({
@@ -203,8 +204,10 @@ exports.getFeeSheet = async (req, res) => {
 
     const studentsInClass = await getScopedStudentsInClass(classId, feeScope);
 
-    if (isCurrent && studentsInClass.length > 0) {
-      await ensureCurrentMonthFeesForStudents(
+    // Same behavior for current, past, and future months: list all scoped students
+    // and create missing unpaid fee rows so nazim can mark paid/unpaid.
+    if (studentsInClass.length > 0) {
+      await ensureFeesForStudents(
         studentsInClass.map((s) => s._id),
         reportMonth,
         reportYear
@@ -221,11 +224,7 @@ exports.getFeeSheet = async (req, res) => {
       feeByStudent[f.studentId.toString()] = f;
     });
 
-    const sheetStudents = isCurrent
-      ? studentsInClass
-      : studentsInClass.filter((s) => feeByStudent[s._id.toString()]);
-
-    const rows = sheetStudents.map((student) => {
+    const rows = studentsInClass.map((student) => {
       const fee = feeByStudent[student._id.toString()];
       return {
         studentId: student._id,
@@ -280,7 +279,6 @@ exports.bulkUpdateFeeStatus = async (req, res) => {
     }
 
     const { reportMonth, reportYear } = parsed;
-    const isCurrent = isCurrentCalendarMonth(reportMonth, reportYear);
     const dueDate = dueDateForMonth(reportMonth, reportYear);
     const monthStr = String(reportMonth);
 
@@ -311,10 +309,7 @@ exports.bulkUpdateFeeStatus = async (req, res) => {
       let fee = await findFeeForStudentMonth(studentId, reportMonth, reportYear);
 
       if (!fee) {
-        if (!isCurrent) {
-          skipped++;
-          continue;
-        }
+        // Create for any month (past / current / future) so nazim can mark fees freely
         await Fees.create({
           studentId,
           amount: 0,
