@@ -107,6 +107,7 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/teacher', require('./routes/teacher'));
 app.use('/api/student', require('./routes/student'));
 app.use('/api/nazim', require('./routes/nazim'));
+app.use('/api/complaints', require('./routes/complaint'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {
