@@ -1,0 +1,13 @@
+node_modules
+npm-debug.log*
+.env
+.env.*
+.git
+.github
+.vscode
+uploads
+scripts/*.log
+*.log
+Dockerfile
+.dockerignore
+DEPLOY_TO_RAILWAY.bat
