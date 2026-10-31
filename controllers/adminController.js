@@ -952,10 +952,12 @@ exports.getAllExams = async (req, res) => {
 // @access  Private/Admin
 exports.getAllAttendance = async (req, res) => {
   try {
+    // .lean() returns plain objects: same JSON output, far less memory as records grow
     const attendance = await Attendance.find()
       .populate('studentId', 'name studentId')
       .populate('classId', 'className section')
-      .sort({ date: -1 });
+      .sort({ date: -1 })
+      .lean();
 
     res.json({
       success: true,
